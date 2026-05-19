@@ -414,7 +414,10 @@ def generate_digest(processed_episodes, digest_config):
 def process_episode(episode, feed_name, settings):
     slug = slugify(f"{feed_name}--{episode['title']}")
     audio_ext = Path(episode["audio_url"].split("?")[0]).suffix or ".mp3"
-    audio_path = TMP_DIR / f"{slug}{audio_ext}"
+    if audio_ext == ".wav":
+        audio_path = TMP_DIR / f"{slug}.orig.wav"
+    else:
+        audio_path = TMP_DIR / f"{slug}{audio_ext}"
     wav_path = TMP_DIR / f"{slug}.wav"
 
     try:
