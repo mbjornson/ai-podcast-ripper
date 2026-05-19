@@ -1,0 +1,15 @@
+[MAIN]
+py-version = 3.14
+
+[FORMAT]
+max-line-length = 120
+
+[MESSAGES CONTROL]
+disable =
+    missing-function-docstring,
+    missing-module-docstring,
+    too-many-arguments,
+    too-many-positional-arguments,
+    too-many-locals,
+    broad-exception-caught,
+    unused-argument

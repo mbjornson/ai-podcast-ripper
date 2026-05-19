@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Run pylint on staged Python files before committing
+
+STAGED_PY=$(git diff --cached --name-only --diff-filter=ACM | grep '\.py$')
+
+if [ -z "$STAGED_PY" ]; then
+    exit 0
+fi
+
+echo "Running pylint..."
+python3 -m pylint $STAGED_PY
+exit $?

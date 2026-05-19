@@ -3,7 +3,6 @@
 
 import json
 import logging
-import os
 import re
 import shutil
 import subprocess
@@ -33,19 +32,19 @@ log = logging.getLogger("podcast-ripper")
 
 
 def load_config():
-    with open(CONFIG_PATH) as f:
+    with open(CONFIG_PATH, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
 def load_state():
     if STATE_PATH.exists():
-        with open(STATE_PATH) as f:
+        with open(STATE_PATH, encoding="utf-8") as f:
             return json.load(f)
     return {}
 
 
 def save_state(state):
-    with open(STATE_PATH, "w") as f:
+    with open(STATE_PATH, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
 
 
@@ -205,6 +204,7 @@ def get_audio_duration(wav_path):
          "-of", "csv=p=0", str(wav_path)],
         capture_output=True,
         text=True,
+        check=False,
     )
     try:
         secs = float(result.stdout.strip())
@@ -232,6 +232,7 @@ def transcribe(wav_path, model_name):
         [whisper_bin, "-m", str(model_path), "-f", str(wav_path), "--no-timestamps", "-otxt"],
         capture_output=True,
         text=True,
+        check=False,
     )
     txt_path = wav_path.with_suffix(".wav.txt")
     if txt_path.exists():
@@ -248,7 +249,7 @@ def build_prompt(summary_config, podcast_name, episode_title, transcript):
     interests = summary_config.get("listener_interests", "")
     sections = summary_config.get("sections", [])
 
-    context = f"You are analyzing a podcast episode transcript."
+    context = "You are analyzing a podcast episode transcript."
     if interests:
         context += f" The listener follows {interests} content."
 
