@@ -337,6 +337,80 @@ url: "{episode.get('link', '')}"
     log.info("Wrote: %s", output_path)
 
 
+def extract_sections(markdown_text, section_headings):
+    parts = re.split(r"(?m)^## ", markdown_text)
+    sections = {}
+    for part in parts[1:]:
+        lines = part.split("\n", 1)
+        heading = lines[0].strip()
+        body = lines[1].strip() if len(lines) > 1 else ""
+        if heading == "Full Transcript":
+            continue
+        if heading in section_headings:
+            sections[heading] = body
+    return sections
+
+
+def generate_digest(processed_episodes, digest_config):
+    section_headings = digest_config.get("sections", ["Summary", "Key Points", "Action Items"])
+    output_dir = TRANSCRIPTS_DIR / digest_config.get("output_dir", "digests")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    today = date.today().isoformat()
+    output_path = output_dir / f"{today}.md"
+
+    grouped = {}
+    for feed_name, ep_title, ep_path in processed_episodes:
+        grouped.setdefault(feed_name, []).append((ep_title, ep_path))
+
+    podcast_names = list(grouped.keys())
+    episode_count = len(processed_episodes)
+
+    lines = [
+        "---",
+        "type: digest",
+        f"date: {today}",
+        f"episodes: {episode_count}",
+        f"podcasts: {podcast_names}",
+        "---",
+        "",
+        f"# Daily Digest — {today}",
+        "",
+    ]
+
+    for feed_name, episodes in grouped.items():
+        lines.append(f"## {feed_name}")
+        lines.append("")
+
+        for ep_title, ep_path in episodes:
+            lines.append(f"### {ep_title}")
+            lines.append("")
+
+            try:
+                content = ep_path.read_text(encoding="utf-8")
+            except OSError:
+                log.warning("Could not read episode file for digest: %s", ep_path)
+                lines.append("*(episode file unavailable)*")
+                lines.append("")
+                continue
+
+            sections = extract_sections(content, section_headings)
+            for heading in section_headings:
+                body = sections.get(heading, "")
+                if body:
+                    lines.append(f"**{heading}**")
+                    lines.append("")
+                    lines.append(body)
+                    lines.append("")
+
+        lines.append("---")
+        lines.append("")
+
+    output_path.write_text("\n".join(lines), encoding="utf-8")
+    log.info("Wrote daily digest: %s (%d episodes from %d podcasts)",
+             output_path, episode_count, len(podcast_names))
+
+
 def process_episode(episode, feed_name, settings):
     slug = slugify(f"{feed_name}--{episode['title']}")
     audio_ext = Path(episode["audio_url"].split("?")[0]).suffix or ".mp3"
@@ -359,7 +433,7 @@ def process_episode(episode, feed_name, settings):
             transcript = transcribe(wav_path, settings["whisper_model"])
 
         if not transcript:
-            return False
+            return None
 
         summary = summarize(
             transcript, episode["title"], feed_name,
@@ -371,7 +445,7 @@ def process_episode(episode, feed_name, settings):
         ep_slug = slugify(episode["title"])
         output_path = TRANSCRIPTS_DIR / podcast_slug / f"{ep_date}--{ep_slug}.md"
         write_markdown(output_path, feed_name, episode, duration, transcript, summary)
-        return True
+        return output_path
 
     finally:
         if not settings.get("keep_audio", False):
@@ -395,6 +469,7 @@ def main():
     TMP_DIR.mkdir(exist_ok=True)
 
     total_processed = 0
+    processed_episodes = []
     for feed_cfg in feeds:
         feed_name = feed_cfg["name"]
         feed_url = feed_cfg["url"]
@@ -410,13 +485,18 @@ def main():
         log.info("Found %d new episode(s) for: %s", len(episodes), feed_name)
         for ep in episodes:
             log.info("Processing: %s", ep["title"])
-            success = process_episode(ep, feed_name, settings)
-            if success:
+            result = process_episode(ep, feed_name, settings)
+            if result:
                 state.setdefault(feed_url, []).append(ep["guid"])
                 save_state(state)
                 total_processed += 1
+                processed_episodes.append((feed_name, ep["title"], result))
             else:
                 log.error("Failed: %s", ep["title"])
+
+    digest_config = config.get("digest", {})
+    if processed_episodes and digest_config.get("enabled", False):
+        generate_digest(processed_episodes, digest_config)
 
     log.info("Done. Processed %d episode(s).", total_processed)
 

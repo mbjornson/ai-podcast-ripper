@@ -28,3 +28,11 @@ summary:
     - heading: "Action Items"
       instruction: "Specific skills to develop, business/career moves to consider, books to read, tools to try, people to follow, health/fitness/mindset practices mentioned"
       format: "checklist"
+
+digest:
+  enabled: false
+  sections:
+    - "Summary"
+    - "Key Points"
+    - "Action Items"
+  output_dir: "digests"

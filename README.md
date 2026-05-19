@@ -71,6 +71,23 @@ transcripts/<podcast-name>/<publish-date>--<episode-title>.md
 
 Each file includes YAML frontmatter, a summary, key points, notable quotes, action items, and the full transcript.
 
+## Daily Digest
+
+When enabled, a digest file is generated at the end of each run collecting summaries from all processed episodes:
+
+```
+transcripts/digests/YYYY-MM-DD.md
+```
+
+Enable it in `config.yaml`:
+
+```yaml
+digest:
+  enabled: true
+```
+
+The digest includes Summary, Key Points, and Action Items by default (configurable via `digest.sections`). Full transcripts are excluded.
+
 ## Configuration
 
 All settings live in `config.yaml`:
@@ -82,6 +99,9 @@ All settings live in `config.yaml`:
 | `max_episodes_per_feed` | `3` | Max new episodes to process per feed per run |
 | `backfill_episodes` | `3` | Older episodes to grab when no new ones exist |
 | `keep_audio` | `false` | Keep downloaded audio files after transcription |
+| `digest.enabled` | `false` | Generate a daily digest after each run |
+| `digest.sections` | `[Summary, Key Points, Action Items]` | Which sections to include |
+| `digest.output_dir` | `digests` | Subdirectory under `transcripts/` |
 
 ## Development
 

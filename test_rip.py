@@ -1,6 +1,7 @@
 """Tests for rip.py"""
 
 from datetime import date
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import rip
@@ -275,7 +276,7 @@ class TestProcessEpisode:
             "_summary_config": {},
         }
         result = rip.process_episode(episode, "Test Pod", settings)
-        assert result is True
+        assert isinstance(result, Path)
         mock_fetch.assert_called_once_with("http://example.com/transcript.txt", "text/plain")
         mock_summarize.assert_called_once()
         assert "Pre-existing transcript text" in mock_summarize.call_args[0][0]
@@ -304,7 +305,7 @@ class TestProcessEpisode:
             "_summary_config": {},
         }
         result = rip.process_episode(episode, "Test Pod", settings)
-        assert result is True
+        assert isinstance(result, Path)
         mock_download.assert_called_once()
         mock_transcribe.assert_called_once()
 
@@ -330,7 +331,227 @@ class TestProcessEpisode:
             "_summary_config": {},
         }
         result = rip.process_episode(episode, "Test Pod", settings)
-        assert result is False
+        assert result is None
+
+
+class TestExtractSections:
+    def test_extracts_requested_sections(self):
+        md = """---
+podcast: "Test"
+---
+
+# Episode Title — Test
+
+## Summary
+This is the summary.
+
+## Key Points
+- Point one
+- Point two
+
+## Tools & Resources
+- Some tool
+
+## Full Transcript
+
+Long transcript text here."""
+        result = rip.extract_sections(md, ["Summary", "Key Points"])
+        assert "This is the summary." in result["Summary"]
+        assert "- Point one" in result["Key Points"]
+        assert "Full Transcript" not in result
+        assert "Tools & Resources" not in result
+
+    def test_skips_full_transcript_even_if_requested(self):
+        md = "## Summary\nGood stuff\n\n## Full Transcript\nLong text"
+        result = rip.extract_sections(md, ["Summary", "Full Transcript"])
+        assert "Summary" in result
+        assert "Full Transcript" not in result
+
+    def test_missing_section_not_in_result(self):
+        md = "## Summary\nGood stuff"
+        result = rip.extract_sections(md, ["Summary", "Action Items"])
+        assert "Summary" in result
+        assert "Action Items" not in result
+
+    def test_empty_input(self):
+        result = rip.extract_sections("", ["Summary"])
+        assert not result
+
+
+class TestGenerateDigest:
+    def test_creates_digest_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(rip, "TRANSCRIPTS_DIR", tmp_path)
+
+        ep_dir = tmp_path / "test-pod"
+        ep_dir.mkdir()
+        ep_path = ep_dir / "2026-05-19--test-ep.md"
+        ep_path.write_text("""---
+podcast: "Test Pod"
+---
+
+# Test Ep — Test Pod
+
+## Summary
+Great episode summary.
+
+## Key Points
+- Insight one
+- Insight two
+
+## Action Items
+- [ ] Do something
+
+## Full Transcript
+
+Long transcript here.
+""")
+
+        processed = [("Test Pod", "Test Ep", ep_path)]
+        digest_config = {
+            "sections": ["Summary", "Key Points", "Action Items"],
+            "output_dir": "digests",
+        }
+        rip.generate_digest(processed, digest_config)
+
+        digest_dir = tmp_path / "digests"
+        assert digest_dir.exists()
+        digest_files = list(digest_dir.glob("*.md"))
+        assert len(digest_files) == 1
+
+        content = digest_files[0].read_text()
+        assert "type: digest" in content
+        assert "## Test Pod" in content
+        assert "### Test Ep" in content
+        assert "Great episode summary." in content
+        assert "Insight one" in content
+        assert "Do something" in content
+        assert "Long transcript here." not in content
+
+    def test_groups_by_podcast(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(rip, "TRANSCRIPTS_DIR", tmp_path)
+
+        ep1 = tmp_path / "ep1.md"
+        ep1.write_text("## Summary\nEp1 summary\n\n## Full Transcript\ntext")
+        ep2 = tmp_path / "ep2.md"
+        ep2.write_text("## Summary\nEp2 summary\n\n## Full Transcript\ntext")
+
+        processed = [
+            ("Podcast A", "Episode 1", ep1),
+            ("Podcast A", "Episode 2", ep2),
+        ]
+        digest_config = {"sections": ["Summary"], "output_dir": "digests"}
+        rip.generate_digest(processed, digest_config)
+
+        digest_path = tmp_path / "digests" / f"{date.today().isoformat()}.md"
+        content = digest_path.read_text()
+        assert content.count("## Podcast A") == 1
+        assert "### Episode 1" in content
+        assert "### Episode 2" in content
+
+    def test_handles_unreadable_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(rip, "TRANSCRIPTS_DIR", tmp_path)
+
+        missing_path = tmp_path / "nonexistent.md"
+        processed = [("Pod", "Ep", missing_path)]
+        digest_config = {"sections": ["Summary"], "output_dir": "digests"}
+        rip.generate_digest(processed, digest_config)
+
+        digest_path = tmp_path / "digests" / f"{date.today().isoformat()}.md"
+        content = digest_path.read_text()
+        assert "*(episode file unavailable)*" in content
+
+    def test_multiple_podcasts(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(rip, "TRANSCRIPTS_DIR", tmp_path)
+
+        ep1 = tmp_path / "ep1.md"
+        ep1.write_text("## Summary\nAlpha summary")
+        ep2 = tmp_path / "ep2.md"
+        ep2.write_text("## Summary\nBeta summary")
+
+        processed = [
+            ("Podcast Alpha", "Ep A", ep1),
+            ("Podcast Beta", "Ep B", ep2),
+        ]
+        digest_config = {"sections": ["Summary"], "output_dir": "digests"}
+        rip.generate_digest(processed, digest_config)
+
+        content = (tmp_path / "digests" / f"{date.today().isoformat()}.md").read_text()
+        assert "## Podcast Alpha" in content
+        assert "## Podcast Beta" in content
+        assert "Alpha summary" in content
+        assert "Beta summary" in content
+        assert "episodes: 2" in content
+
+
+class TestMainDigestWiring:
+    @patch("rip.generate_digest")
+    @patch("rip.process_episode")
+    @patch("rip.get_new_episodes")
+    @patch("rip.save_state")
+    @patch("rip.load_state", return_value={})
+    @patch("rip.load_config")
+    def test_calls_digest_when_enabled(self, mock_config, mock_load_state,
+                                        mock_save, mock_get_eps, mock_process,
+                                        mock_digest):
+        mock_config.return_value = {
+            "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
+            "settings": {"max_episodes_per_feed": 3},
+            "summary": {},
+            "digest": {"enabled": True, "sections": ["Summary"], "output_dir": "digests"},
+        }
+        ep_path = Path("/tmp/fake-ep.md")
+        mock_get_eps.return_value = [{"title": "Ep1", "guid": "g1"}]
+        mock_process.return_value = ep_path
+
+        rip.main()
+
+        mock_digest.assert_called_once()
+        call_args = mock_digest.call_args[0]
+        assert call_args[0] == [("TestPod", "Ep1", ep_path)]
+        assert call_args[1]["enabled"] is True
+
+    @patch("rip.generate_digest")
+    @patch("rip.process_episode")
+    @patch("rip.get_new_episodes")
+    @patch("rip.save_state")
+    @patch("rip.load_state", return_value={})
+    @patch("rip.load_config")
+    def test_skips_digest_when_disabled(self, mock_config, mock_load_state,
+                                         mock_save, mock_get_eps, mock_process,
+                                         mock_digest):
+        mock_config.return_value = {
+            "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
+            "settings": {"max_episodes_per_feed": 3},
+            "summary": {},
+            "digest": {"enabled": False},
+        }
+        mock_get_eps.return_value = [{"title": "Ep1", "guid": "g1"}]
+        mock_process.return_value = Path("/tmp/fake.md")
+
+        rip.main()
+
+        mock_digest.assert_not_called()
+
+    @patch("rip.generate_digest")
+    @patch("rip.process_episode")
+    @patch("rip.get_new_episodes")
+    @patch("rip.save_state")
+    @patch("rip.load_state", return_value={})
+    @patch("rip.load_config")
+    def test_skips_digest_when_no_episodes(self, mock_config, mock_load_state,
+                                            mock_save, mock_get_eps, mock_process,
+                                            mock_digest):
+        mock_config.return_value = {
+            "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
+            "settings": {"max_episodes_per_feed": 3},
+            "summary": {},
+            "digest": {"enabled": True},
+        }
+        mock_get_eps.return_value = []
+
+        rip.main()
+
+        mock_digest.assert_not_called()
 
 
 class TestSaveLoadState:
