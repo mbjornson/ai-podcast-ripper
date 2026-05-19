@@ -58,7 +58,7 @@ def slugify(text):
 NON_RSS_DOMAINS = ["spotify.com", "apple.com/podcast", "youtube.com", "youtu.be"]
 
 
-def get_new_episodes(feed_url, feed_name, state, max_episodes):
+def get_new_episodes(feed_url, feed_name, state, max_episodes, settings=None):
     if any(d in feed_url for d in NON_RSS_DOMAINS):
         log.error(
             "%s: URL is not an RSS feed (%s). Find the podcast's RSS feed URL instead.",
@@ -86,19 +86,22 @@ def get_new_episodes(feed_url, feed_name, state, max_episodes):
             continue
 
         published = entry.get("published", "")
+        transcript_meta = entry.get("podcast_transcript")
         all_unprocessed.append({
             "guid": guid,
             "title": entry.get("title", "Untitled"),
             "audio_url": audio_url,
             "published": published,
             "link": entry.get("link", ""),
+            "transcript_url": transcript_meta.get("url") if isinstance(transcript_meta, dict) else None,
+            "transcript_type": transcript_meta.get("type", "") if isinstance(transcript_meta, dict) else "",
         })
 
     recent = all_unprocessed[:max_episodes]
     if recent:
         return recent
 
-    backfill = settings.get("backfill_episodes", 3)
+    backfill = (settings or {}).get("backfill_episodes", 3)
     older = _get_backfill_episodes(feed_url, feed, processed, backfill)
     if older:
         log.info("No new episodes, backfilling %d older episode(s) for: %s", len(older), feed_name)
@@ -119,16 +122,61 @@ def _get_backfill_episodes(feed_url, feed, processed, count):
         )
         if not audio_url:
             continue
+        transcript_meta = entry.get("podcast_transcript")
         backfill.append({
             "guid": guid,
             "title": entry.get("title", "Untitled"),
             "audio_url": audio_url,
             "published": entry.get("published", ""),
             "link": entry.get("link", ""),
+            "transcript_url": transcript_meta.get("url") if isinstance(transcript_meta, dict) else None,
+            "transcript_type": transcript_meta.get("type", "") if isinstance(transcript_meta, dict) else "",
         })
         if len(backfill) >= count:
             break
     return backfill
+
+
+def strip_vtt_srt(text):
+    """Strip timestamps and formatting from VTT/SRT transcript to plain text."""
+    lines = text.splitlines()
+    out = []
+    for line in lines:
+        line = line.strip()
+        if not line or line == "WEBVTT":
+            continue
+        if re.match(r"^\d+$", line):
+            continue
+        if re.match(r"[\d:.,]+ --> [\d:.,]+", line):
+            continue
+        if line.startswith("NOTE"):
+            continue
+        line = re.sub(r"<v\s+([^>]+)>", r"\1: ", line)
+        line = re.sub(r"<[^>]+>", "", line)
+        out.append(line)
+    return "\n".join(out)
+
+
+def fetch_transcript(url, content_type):
+    """Download and parse a transcript from the feed's podcast:transcript tag."""
+    log.info("Fetching existing transcript: %s", url)
+    req = urllib.request.Request(url, headers={"User-Agent": "podcast-ripper/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+    except Exception as e:
+        log.warning("Failed to fetch transcript: %s", e)
+        return None
+
+    if not raw or len(raw) < 200:
+        return None
+
+    ctype = (content_type or "").lower()
+    if "vtt" in ctype or "vtt" in url.lower() or raw.strip().startswith("WEBVTT"):
+        return strip_vtt_srt(raw)
+    if "srt" in ctype or "srt" in url.lower() or re.match(r"^\d+\s*\n[\d:,]+ -->", raw.strip()):
+        return strip_vtt_srt(raw)
+    return raw
 
 
 def download_audio(audio_url, dest_path):
@@ -295,11 +343,20 @@ def process_episode(episode, feed_name, settings):
     wav_path = TMP_DIR / f"{slug}.wav"
 
     try:
-        download_audio(episode["audio_url"], audio_path)
-        convert_to_wav(audio_path, wav_path)
-        duration = get_audio_duration(wav_path)
+        transcript = None
+        duration = "unknown"
 
-        transcript = transcribe(wav_path, settings["whisper_model"])
+        if episode.get("transcript_url"):
+            transcript = fetch_transcript(episode["transcript_url"], episode.get("transcript_type", ""))
+            if transcript:
+                log.info("Using existing transcript for: %s", episode["title"])
+
+        if not transcript:
+            download_audio(episode["audio_url"], audio_path)
+            convert_to_wav(audio_path, wav_path)
+            duration = get_audio_duration(wav_path)
+            transcript = transcribe(wav_path, settings["whisper_model"])
+
         if not transcript:
             return False
 
@@ -343,7 +400,7 @@ def main():
         max_eps = settings.get("max_episodes_per_feed", 3)
 
         log.info("Checking feed: %s", feed_name)
-        episodes = get_new_episodes(feed_url, feed_name, state, max_eps)
+        episodes = get_new_episodes(feed_url, feed_name, state, max_eps, settings)
 
         if not episodes:
             log.info("No new episodes for: %s", feed_name)

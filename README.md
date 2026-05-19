@@ -39,6 +39,10 @@ Make sure Ollama is running (`ollama serve` or the Ollama desktop app).
 
 ### 4. Add your podcasts
 
+```bash
+cp config.example.yaml config.yaml
+```
+
 Edit `config.yaml` and add RSS feed URLs:
 
 ```yaml

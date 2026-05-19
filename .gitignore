@@ -1,5 +1,6 @@
 tmp/
 transcripts/
 state.json
+config.yaml
 *.wav
 *.mp3

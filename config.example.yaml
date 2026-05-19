@@ -1,6 +1,6 @@
 feeds:
   - name: "Lenny's Podcast"
-    url: "https://www.lennysnewsletter.com/feed"
+    url: "https://api.substack.com/feed/podcast/10845.rss"
   # - name: "Another Podcast"
   #   url: "https://example.com/feed.xml"
 
