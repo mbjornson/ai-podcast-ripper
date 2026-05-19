@@ -1,0 +1,5 @@
+tmp/
+transcripts/
+state.json
+*.wav
+*.mp3

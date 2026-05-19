@@ -1,0 +1,30 @@
+feeds:
+  - name: "Lenny's Podcast"
+    url: "https://www.lennysnewsletter.com/feed"
+  # - name: "Another Podcast"
+  #   url: "https://example.com/feed.xml"
+
+settings:
+  whisper_model: "medium"
+  ollama_model: "gemma3"
+  max_episodes_per_feed: 3
+  backfill_episodes: 3
+  keep_audio: false
+
+summary:
+  listener_interests: "tech and business"
+  sections:
+    - heading: "Summary"
+      instruction: "2-3 paragraph summary of the episode's main discussion and the guest's credibility/background"
+    - heading: "Key Points"
+      instruction: "Each major insight, claim, or framework discussed. Include specific numbers, stats, or data points. Note any contrarian or non-obvious takes."
+      format: "bullets"
+    - heading: "Tools & Resources"
+      instruction: "Any tools, apps, books, courses, or people mentioned worth checking out"
+      format: "bullets"
+    - heading: "Quotable"
+      instruction: "1-2 standout quotes from the episode worth remembering"
+      format: "quotes"
+    - heading: "Action Items"
+      instruction: "Specific skills to develop, business/career moves to consider, books to read, tools to try, people to follow, health/fitness/mindset practices mentioned"
+      format: "checklist"

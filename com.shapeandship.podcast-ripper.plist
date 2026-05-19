@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.shapeandship.podcast-ripper</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/matt/.pyenv/versions/3.14.0/bin/python3</string>
+        <string>/Users/matt/Projects/podcast-ripper/rip.py</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>0</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/matt/Library/Logs/podcast-ripper.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/matt/Library/Logs/podcast-ripper.log</string>
+    <key>WorkingDirectory</key>
+    <string>/Users/matt/Projects/podcast-ripper</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>
