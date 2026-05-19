@@ -83,6 +83,15 @@ All settings live in `config.yaml`:
 | `backfill_episodes` | `3` | Older episodes to grab when no new ones exist |
 | `keep_audio` | `false` | Keep downloaded audio files after transcription |
 
+## Development
+
+Enable the pre-commit hook to run pylint before each commit:
+
+```bash
+pip3 install pylint
+git config core.hooksPath .githooks
+```
+
 ## Daily scheduling (optional)
 
 To run automatically at midnight:
