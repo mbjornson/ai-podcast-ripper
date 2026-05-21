@@ -283,13 +283,12 @@ class TestProcessEpisode:
 
     @patch("rip.fetch_transcript", return_value=None)
     @patch("rip.download_audio")
-    @patch("rip.convert_to_wav")
     @patch("rip.get_audio_duration", return_value="30:00")
     @patch("rip.transcribe", return_value="Whisper transcript")
     @patch("rip.summarize", return_value="## Summary\nTest")
     @patch("rip.write_markdown")
     def test_falls_back_to_audio(self, mock_write, mock_summarize, mock_transcribe,
-                                  mock_duration, mock_convert, mock_download, mock_fetch):
+                                  mock_duration, mock_download, mock_fetch):
         episode = {
             "title": "Ep Without Transcript",
             "audio_url": "http://example.com/ep.mp3",
@@ -311,11 +310,10 @@ class TestProcessEpisode:
 
     @patch("rip.fetch_transcript", return_value=None)
     @patch("rip.download_audio")
-    @patch("rip.convert_to_wav")
     @patch("rip.get_audio_duration", return_value="10:00")
     @patch("rip.transcribe", return_value=None)
     def test_returns_false_when_no_transcript(self, mock_transcribe, mock_duration,
-                                              mock_convert, mock_download, mock_fetch):
+                                              mock_download, mock_fetch):
         episode = {
             "title": "Failed Ep",
             "audio_url": "http://example.com/ep.mp3",

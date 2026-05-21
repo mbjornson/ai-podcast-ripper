@@ -14,6 +14,7 @@ from pathlib import Path
 
 import feedparser
 import yaml
+from faster_whisper import WhisperModel
 
 BASE_DIR = Path(__file__).parent
 CONFIG_PATH = BASE_DIR / "config.yaml"
@@ -185,18 +186,6 @@ def download_audio(audio_url, dest_path):
         shutil.copyfileobj(resp, f)
 
 
-def convert_to_wav(input_path, wav_path):
-    log.info("Converting to WAV: %s", input_path.name)
-    subprocess.run(
-        [
-            "ffmpeg", "-i", str(input_path),
-            "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
-            "-y", str(wav_path),
-        ],
-        capture_output=True,
-        check=True,
-    )
-
 
 def get_audio_duration(wav_path):
     result = subprocess.run(
@@ -215,34 +204,20 @@ def get_audio_duration(wav_path):
         return "unknown"
 
 
-def transcribe(wav_path, model_name):
-    whisper_bin = shutil.which("whisper-cli")
-    if not whisper_bin:
-        log.error("whisper-cli not found. Install: brew install whisper-cpp")
-        sys.exit(1)
+_WHISPER_MODEL = {}
 
-    model_path = Path(f"/opt/homebrew/share/whisper-cpp/models/ggml-{model_name}.bin")
-    if not model_path.exists():
-        log.error("Whisper model not found: %s", model_path)
-        log.error("Download: whisper-cpp-download-ggml-model %s", model_name)
-        sys.exit(1)
 
-    log.info("Transcribing: %s (model: %s)", wav_path.name, model_name)
-    result = subprocess.run(
-        [whisper_bin, "-m", str(model_path), "-f", str(wav_path), "--no-timestamps", "-otxt"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    txt_path = wav_path.with_suffix(".wav.txt")
-    if txt_path.exists():
-        return txt_path.read_text().strip()
-
-    if result.stdout.strip():
-        return result.stdout.strip()
-
-    log.error("Transcription produced no output. stderr: %s", result.stderr[:500])
-    return None
+def transcribe(audio_path, model_name):
+    if model_name not in _WHISPER_MODEL:
+        log.info("Loading Faster Whisper model: %s (first run downloads ~3GB)", model_name)
+        _WHISPER_MODEL[model_name] = WhisperModel(model_name, device="cpu", compute_type="int8")
+    model = _WHISPER_MODEL[model_name]
+    log.info("Transcribing: %s (model: %s)", audio_path.name, model_name)
+    segments, _info = model.transcribe(str(audio_path), beam_size=5)
+    text = " ".join(seg.text.strip() for seg in segments)
+    if not text:
+        log.error("Transcription produced no output for: %s", audio_path.name)
+    return text or None
 
 
 def build_prompt(summary_config, podcast_name, episode_title, transcript):
@@ -414,11 +389,7 @@ def generate_digest(processed_episodes, digest_config):
 def process_episode(episode, feed_name, settings):
     slug = slugify(f"{feed_name}--{episode['title']}")
     audio_ext = Path(episode["audio_url"].split("?")[0]).suffix or ".mp3"
-    if audio_ext == ".wav":
-        audio_path = TMP_DIR / f"{slug}.orig.wav"
-    else:
-        audio_path = TMP_DIR / f"{slug}{audio_ext}"
-    wav_path = TMP_DIR / f"{slug}.wav"
+    audio_path = TMP_DIR / f"{slug}{audio_ext}"
 
     try:
         transcript = None
@@ -431,9 +402,8 @@ def process_episode(episode, feed_name, settings):
 
         if not transcript:
             download_audio(episode["audio_url"], audio_path)
-            convert_to_wav(audio_path, wav_path)
-            duration = get_audio_duration(wav_path)
-            transcript = transcribe(wav_path, settings["whisper_model"])
+            duration = get_audio_duration(audio_path)
+            transcript = transcribe(audio_path, settings["whisper_model"])
 
         if not transcript:
             return None
@@ -453,7 +423,6 @@ def process_episode(episode, feed_name, settings):
     finally:
         if not settings.get("keep_audio", False):
             audio_path.unlink(missing_ok=True)
-            wav_path.unlink(missing_ok=True)
             for f in TMP_DIR.glob(f"{slug}*"):
                 f.unlink(missing_ok=True)
 
@@ -488,7 +457,11 @@ def main():
         log.info("Found %d new episode(s) for: %s", len(episodes), feed_name)
         for ep in episodes:
             log.info("Processing: %s", ep["title"])
-            result = process_episode(ep, feed_name, settings)
+            try:
+                result = process_episode(ep, feed_name, settings)
+            except Exception:
+                log.exception("Crashed processing: %s", ep["title"])
+                result = None
             if result:
                 state.setdefault(feed_url, []).append(ep["guid"])
                 save_state(state)
