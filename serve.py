@@ -18,6 +18,11 @@ import dashboard as dashboard_mod
 import metrics as metrics_mod
 import search as search_mod
 
+try:
+    import entities as entities_mod
+except Exception:  # pylint: disable=broad-except
+    entities_mod = None  # pylint: disable=invalid-name
+
 BASE_DIR = Path(__file__).parent
 RATINGS_PATH = BASE_DIR / "ratings.jsonl"
 DIGESTS_DIR = BASE_DIR / "transcripts" / "digests"
@@ -77,6 +82,11 @@ def dashboard_md():
     return send_from_directory(DIGESTS_DIR, "dashboard.md", mimetype="text/markdown")
 
 
+@app.route("/entities.html")
+def entities_html():
+    return send_from_directory(DIGESTS_DIR, "entities.html")
+
+
 @app.route("/dashboard/<path:fname>")
 def dashboard_detail(fname):
     return send_from_directory(DIGESTS_DIR / "dashboard", fname)
@@ -127,6 +137,25 @@ def api_search():
         results = search_mod.search(q, k=k, podcast_slug=podcast)
     except FileNotFoundError as e:
         return jsonify({"error": str(e)}), 503
+    return jsonify(results)
+
+
+@app.route("/api/entities/<kind>", methods=["GET"])
+def api_entities(kind):
+    if entities_mod is None:
+        return jsonify({"error": "entities module not available"}), 503
+    if kind not in entities_mod.KINDS:
+        return jsonify({"error": f"unknown kind; expected one of {list(entities_mod.KINDS)}"}), 400
+    try:
+        k = int(request.args.get("k", "50"))
+    except ValueError:
+        k = 50
+    k = max(1, min(k, 500))
+    podcast = request.args.get("podcast") or None
+    results = entities_mod.aggregate(kind, podcast_slug=podcast)[:k]
+    # Trim episodes per entity for API payload size
+    for r in results:
+        r["episodes"] = r["episodes"][:30]
     return jsonify(results)
 
 

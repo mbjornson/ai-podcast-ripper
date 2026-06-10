@@ -16,6 +16,11 @@ import yaml
 
 import metrics as metrics_mod
 
+try:
+    import entities as entities_mod
+except Exception:  # entities is optional  # pylint: disable=broad-except
+    entities_mod = None  # pylint: disable=invalid-name
+
 BASE_DIR = Path(__file__).parent
 CONFIG_PATH = BASE_DIR / "config.yaml"
 METRICS_PATH = BASE_DIR / "metrics.jsonl"
@@ -613,7 +618,7 @@ details dt{{font-weight:600;margin-top:.4em}}
 details dd{{margin:0 0 0 1em;color:#555}}
 </style></head><body>
 <h1>Signal Dashboard — {today.isoformat()}</h1>
-<p class="muted">Window: {window_days}d · Drift: {drift_days}d vs prior · {len(windowed)} episodes · {len(aggs)} podcasts</p>
+<p class="muted">Window: {window_days}d · Drift: {drift_days}d vs prior · {len(windowed)} episodes · {len(aggs)} podcasts · <a href='entities.html'>Cross-episode mentions →</a></p>
 <input id="search-box" type="search" placeholder="Search across all episodes — e.g. &quot;pricing AI products&quot;, &quot;remote teams&quot;, &quot;constitutional AI&quot;" autocomplete="off">
 <div id="search-results"></div>
 <details open><summary>Column definitions</summary>
@@ -698,6 +703,110 @@ details dd{{margin:0 0 0 1em;color:#555}}
 """
 
 
+ENTITY_KIND_LABELS = {
+    "books": "Books",
+    "tools": "Tools & Products",
+    "people": "People",
+    "companies": "Companies",
+    "frameworks": "Frameworks & Concepts",
+}
+
+
+def render_entities_html():
+    if entities_mod is None or not entities_mod.ENTITIES_PATH.exists():
+        return None
+    rows = entities_mod.load_all_rows()
+    if not rows:
+        return None
+    today = datetime.date.today()
+    n_episodes = len(rows)
+
+    sections_html = []
+    for kind in entities_mod.KINDS:
+        aggs = entities_mod.aggregate(kind, rows=rows)
+        if not aggs:
+            continue
+        items_html = []
+        for i, a in enumerate(aggs):
+            extra = f"<span class='extra'>{html.escape(a['extra'])}</span>" if a["extra"] else ""
+            ep_lines = []
+            for ep in a["episodes"][:30]:
+                podcast_link = (
+                    f"<a href='dashboard/{html.escape(ep.get('podcast_slug') or '')}.html'>"
+                    f"{html.escape(ep.get('podcast') or '')}</a>"
+                )
+                title_link = (
+                    f"<a href='/{html.escape(ep.get('path') or '')}' target='_blank'>"
+                    f"{html.escape((ep.get('episode_title') or '')[:90])}</a>"
+                )
+                ep_lines.append(
+                    f"<li><span class='ep-date'>{html.escape(ep.get('date') or '')}</span> "
+                    f"{podcast_link} — {title_link}</li>"
+                )
+            initially_open = i < 5  # auto-open the top 5 so users see something rich
+            open_attr = " open" if initially_open else ""
+            items_html.append(
+                f"<details class='entity'{open_attr}>"
+                f"<summary><span class='count'>{a['count']}</span> "
+                f"<span class='name'>{html.escape(a['name'])}</span> {extra}</summary>"
+                f"<ul class='ep-list'>{''.join(ep_lines)}</ul>"
+                f"</details>"
+            )
+        sections_html.append(
+            f"<section id='kind-{kind}'>"
+            f"<h2>{ENTITY_KIND_LABELS[kind]}</h2>"
+            f"<p class='muted'>{len(aggs)} unique · sorted by mention count</p>"
+            f"<div class='entities'>{''.join(items_html)}</div>"
+            f"</section>"
+        )
+
+    nav_html = " · ".join(
+        f"<a href='#kind-{kind}'>{ENTITY_KIND_LABELS[kind]}</a>"
+        for kind in entities_mod.KINDS
+    )
+
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<title>Cross-Episode Mentions — {today.isoformat()}</title>
+<style>
+body{{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:1100px;margin:2em auto;padding:0 1em;color:#222}}
+h1{{font-weight:600;margin-bottom:.2em}}
+h2{{font-weight:600;margin-top:2em;padding-bottom:.3em;border-bottom:2px solid #eee}}
+.muted{{color:#888;font-size:13px}}
+.back{{font-size:13px;display:inline-block;margin-bottom:1em}}
+.nav{{margin:1em 0 2em;font-size:14px;color:#888}}
+.entities{{display:grid;gap:2px}}
+.entity{{padding:6px 10px;background:#fafafa;border-radius:4px}}
+.entity[open]{{background:#f0f5fa}}
+.entity summary{{cursor:pointer;display:flex;align-items:baseline;gap:.8em}}
+.entity summary::-webkit-details-marker{{display:none}}
+.entity summary::before{{content:'▸';display:inline-block;width:1em;color:#888}}
+.entity[open] summary::before{{content:'▾'}}
+.count{{font-variant-numeric:tabular-nums;font-weight:600;color:#0a7;min-width:2em;text-align:right}}
+.name{{font-weight:600}}
+.extra{{color:#666;font-size:13px}}
+.ep-list{{margin:.6em 0 .6em 2em;padding:0;list-style:none}}
+.ep-list li{{padding:2px 0;font-size:13px;color:#444}}
+.ep-date{{color:#888;font-variant-numeric:tabular-nums;font-size:12px;margin-right:.6em}}
+a{{color:#2563eb;text-decoration:none}}
+a:hover{{text-decoration:underline}}
+</style></head><body>
+<a class="back" href="dashboard.html">← Back to dashboard</a>
+<h1>Cross-Episode Mentions</h1>
+<p class="muted">Aggregated from {n_episodes} episodes. Click any entity to see which episodes mentioned it.</p>
+<div class="nav">Jump to: {nav_html}</div>
+{''.join(sections_html)}
+</body></html>
+"""
+
+
+def write_entities_page(out_dir):
+    body = render_entities_html()
+    if body is None:
+        return
+    (out_dir / "entities.html").write_text(body, encoding="utf-8")
+    log.info("Wrote entities page: %s", out_dir / "entities.html")
+
+
 def write_detail_pages(out_dir, window_days, drift_days):
     """Write one HTML detail page per podcast under <out_dir>/dashboard/<slug>.html.
 
@@ -735,6 +844,7 @@ def generate(output_dir=None):
         html_path.write_text(render_html(window_days, drift_days), encoding="utf-8")
         log.info("Wrote: %s", html_path)
         write_detail_pages(out_dir, window_days, drift_days)
+        write_entities_page(out_dir)
 
 
 def main():
@@ -770,6 +880,7 @@ def main():
         html_path.write_text(render_html(window_days, drift_days), encoding="utf-8")
         log.info("Wrote: %s", html_path)
         write_detail_pages(out_dir, window_days, drift_days)
+        write_entities_page(out_dir)
 
 
 if __name__ == "__main__":
