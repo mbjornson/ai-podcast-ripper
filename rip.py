@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.request
 from datetime import date
 from email.utils import parsedate_to_datetime
@@ -16,11 +17,14 @@ import feedparser
 import yaml
 from faster_whisper import WhisperModel
 
+import metrics as metrics_mod
+
 BASE_DIR = Path(__file__).parent
 CONFIG_PATH = BASE_DIR / "config.yaml"
 STATE_PATH = BASE_DIR / "state.json"
 TRANSCRIPTS_DIR = BASE_DIR / "transcripts"
 TMP_DIR = BASE_DIR / "tmp"
+METRICS_PATH = BASE_DIR / "metrics.jsonl"
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 
@@ -180,6 +184,9 @@ def fetch_transcript(url, content_type):
 
 
 def download_audio(audio_url, dest_path):
+    if dest_path.exists():
+        log.info("Already downloaded: %s", dest_path.name)
+        return
     log.info("Downloading: %s", audio_url)
     req = urllib.request.Request(audio_url, headers={"User-Agent": "podcast-ripper/1.0"})
     with urllib.request.urlopen(req, timeout=300) as resp, open(dest_path, "wb") as f:
@@ -220,66 +227,14 @@ def transcribe(audio_path, model_name):
     return text or None
 
 
-def build_prompt(summary_config, podcast_name, episode_title, transcript):
-    interests = summary_config.get("listener_interests", "")
-    sections = summary_config.get("sections", [])
-
-    context = "You are analyzing a podcast episode transcript."
-    if interests:
-        context += f" The listener follows {interests} content."
-
-    section_lines = []
-    for s in sections:
-        heading = s["heading"]
-        instruction = s["instruction"]
-        fmt = s.get("format", "prose")
-        if fmt == "bullets":
-            section_lines.append(f"## {heading}\n- [{instruction}]")
-        elif fmt == "checklist":
-            section_lines.append(f"## {heading}\n- [ ] [{instruction}]")
-        elif fmt == "quotes":
-            section_lines.append(f"## {heading}\n> [{instruction}]")
-        else:
-            section_lines.append(f"## {heading}\n[{instruction}]")
-
-    return f"""{context}
-
-Podcast: {podcast_name}
-Episode: {episode_title}
-
-Provide your response in exactly this format:
-
-{chr(10).join(section_lines)}
-
-Focus on actionable signal over generic advice. Skip pleasantries and filler. If the episode is mostly entertainment with low signal, say so.
-
-Transcript:
-{transcript[:12000]}"""
+# Re-exported from metrics_mod so existing tests + callers keep their import surface.
+build_prompt = metrics_mod.build_summary_prompt
 
 
 def summarize(transcript, episode_title, podcast_name, model, summary_config):
     log.info("Summarizing with %s...", model)
     prompt = build_prompt(summary_config, podcast_name, episode_title, transcript)
-
-    payload = json.dumps({
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-        "options": {"num_predict": 2048, "temperature": 0.3},
-    })
-
-    req = urllib.request.Request(
-        OLLAMA_URL,
-        data=payload.encode(),
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=300) as resp:
-            result = json.loads(resp.read())
-            return result.get("response", "")
-    except Exception as e:
-        log.error("Ollama summarization failed: %s", e)
-        return None
+    return metrics_mod.ollama_generate(model, prompt, num_predict=2048, temperature=0.3)
 
 
 def parse_episode_date(published):
@@ -386,6 +341,35 @@ def generate_digest(processed_episodes, digest_config):
              output_path, episode_count, len(podcast_names))
 
 
+def record_episode_metrics(output_path, feed_name, podcast_slug, settings,
+                            transcribed_seconds, summarized_seconds):
+    """Compute heuristics + optional LLM judge, append row to metrics.jsonl."""
+    metrics_cfg = settings.get("_metrics_config", {}) or {}
+    if not metrics_cfg.get("enabled", False):
+        return
+
+    parsed = metrics_mod.parse_episode(output_path)
+    if parsed is None:
+        log.warning("Metrics: could not re-read %s", output_path)
+        return
+
+    judge_result = None
+    if metrics_cfg.get("judge_enabled", False) and parsed["sections"].get("Summary"):
+        judge_model = metrics_cfg.get("judge_model") or settings["ollama_model"]
+        judge_result = metrics_mod.judge_episode(parsed, judge_model)
+
+    row = metrics_mod.build_metrics_row(
+        parsed,
+        rel_path=str(output_path.relative_to(BASE_DIR)),
+        podcast_slug=podcast_slug,
+        fallback_podcast_name=feed_name,
+        judge_result=judge_result,
+        transcribed_seconds=transcribed_seconds,
+        summarized_seconds=summarized_seconds,
+    )
+    metrics_mod.append_metrics_row(METRICS_PATH, row)
+
+
 def process_episode(episode, feed_name, settings):
     slug = slugify(f"{feed_name}--{episode['title']}")
     audio_ext = Path(episode["audio_url"].split("?")[0]).suffix or ".mp3"
@@ -394,6 +378,8 @@ def process_episode(episode, feed_name, settings):
     try:
         transcript = None
         duration = "unknown"
+        transcribed_seconds = None
+        summarized_seconds = None
 
         if episode.get("transcript_url"):
             transcript = fetch_transcript(episode["transcript_url"], episode.get("transcript_type", ""))
@@ -403,21 +389,30 @@ def process_episode(episode, feed_name, settings):
         if not transcript:
             download_audio(episode["audio_url"], audio_path)
             duration = get_audio_duration(audio_path)
+            t0 = time.monotonic()
             transcript = transcribe(audio_path, settings["whisper_model"])
+            transcribed_seconds = round(time.monotonic() - t0, 1)
 
         if not transcript:
             return None
 
+        t0 = time.monotonic()
         summary = summarize(
             transcript, episode["title"], feed_name,
             settings["ollama_model"], settings.get("_summary_config", {}),
         )
+        summarized_seconds = round(time.monotonic() - t0, 1)
 
         ep_date = parse_episode_date(episode.get("published", ""))
         podcast_slug = slugify(feed_name)
         ep_slug = slugify(episode["title"])
         output_path = TRANSCRIPTS_DIR / podcast_slug / f"{ep_date}--{ep_slug}.md"
         write_markdown(output_path, feed_name, episode, duration, transcript, summary)
+
+        record_episode_metrics(
+            output_path, feed_name, podcast_slug, settings,
+            transcribed_seconds, summarized_seconds,
+        )
         return output_path
 
     finally:
@@ -432,6 +427,7 @@ def main():
     feeds = config.get("feeds") or []
     settings = config.get("settings", {})
     settings["_summary_config"] = config.get("summary", {})
+    settings["_metrics_config"] = config.get("metrics", {})
 
     if not feeds:
         log.warning("No feeds in config.yaml. Add some podcast RSS URLs and re-run.")
@@ -473,6 +469,15 @@ def main():
     digest_config = config.get("digest", {})
     if processed_episodes and digest_config.get("enabled", False):
         generate_digest(processed_episodes, digest_config)
+
+    dashboard_config = config.get("dashboard", {})
+    if dashboard_config.get("enabled", False):
+        try:
+            # Local import: dashboard pulls heavy deps (numpy, etc) only when used.
+            import dashboard as dashboard_mod  # pylint: disable=import-outside-toplevel
+            dashboard_mod.generate()
+        except Exception:
+            log.exception("Dashboard generation failed")
 
     log.info("Done. Processed %d episode(s).", total_processed)
 

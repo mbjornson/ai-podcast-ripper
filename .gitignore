@@ -2,6 +2,10 @@ tmp/
 transcripts/
 state.json
 config.yaml
+metrics.jsonl
+metrics.*.jsonl
+ratings.jsonl
+.search_index/
 *.wav
 *.mp3
 __pycache__/
