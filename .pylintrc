@@ -4,6 +4,12 @@ py-version = 3.14
 [FORMAT]
 max-line-length = 120
 
+[SIMILARITIES]
+# Default 4 is too aggressive for LLM prompt templates that share a context-injection prefix.
+min-similarity-lines = 10
+ignore-imports = yes
+ignore-signatures = yes
+
 [MESSAGES CONTROL]
 disable =
     missing-function-docstring,

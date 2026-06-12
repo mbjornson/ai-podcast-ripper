@@ -1,0 +1,6 @@
+feedparser
+pyyaml
+faster-whisper
+flask
+numpy
+sentence-transformers

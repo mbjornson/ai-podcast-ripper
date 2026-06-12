@@ -271,21 +271,28 @@ def ollama_generate(model, prompt, num_predict=2048, temperature=0.3,
         return None
 
 
-def parse_judge_response(raw):
-    """Extract JSON object from judge response. Tolerates surrounding text."""
+def parse_json_with_fallback(raw, pattern=r"\{.*?\}"):
+    """Parse JSON from a model response. Tolerates leading or trailing prose."""
     if not raw:
         return None
     try:
-        data = json.loads(raw)
+        return json.loads(raw)
     except json.JSONDecodeError:
-        match = re.search(r"\{.*?\}", raw, re.DOTALL)
-        if not match:
-            return None
-        try:
-            data = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return None
+        pass
+    match = re.search(pattern, raw, re.DOTALL)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
 
+
+def parse_judge_response(raw):
+    """Extract JSON object from judge response. Tolerates surrounding text."""
+    data = parse_json_with_fallback(raw)
+    if not isinstance(data, dict):
+        return None
     try:
         return {
             "actionability": int(data.get("actionability", 0)),

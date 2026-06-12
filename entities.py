@@ -105,16 +105,7 @@ def extract_entities(parsed, model, timeout=120):
 
 
 def _parse_response(raw):
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if not match:
-            return None
-        try:
-            data = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return None
+    data = metrics_mod.parse_json_with_fallback(raw, pattern=r"\{.*\}")
     if not isinstance(data, dict):
         return None
     out = {kind: [] for kind in KINDS}
