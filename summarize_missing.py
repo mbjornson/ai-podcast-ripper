@@ -61,20 +61,14 @@ def summarize(transcript, episode_title, podcast_name, model, summary_config):
 
 def patch_file(path, summary):
     text = path.read_text(encoding="utf-8")
-    marker = "## Full Transcript"
-    if marker not in text:
-        print(f"  SKIP: no transcript marker in {path}")
-        return
-
-    # Split at the H1 title line — replace everything between title and Full Transcript
     lines = text.split("\n")
     h1_idx = next((i for i, l in enumerate(lines) if l.startswith("# ")), None)
-    transcript_idx = next((i for i, l in enumerate(lines) if l.strip() == marker), None)
-    if h1_idx is None or transcript_idx is None:
-        print(f"  SKIP: can't locate structure in {path}")
+    if h1_idx is None:
+        print(f"  SKIP: no H1 title in {path}")
         return
 
-    new_lines = lines[:h1_idx + 1] + ["", summary, ""] + lines[transcript_idx:]
+    # Markdown is summary-only (transcript lives in raw/); replace the body after the H1.
+    new_lines = lines[:h1_idx + 1] + ["", summary, ""]
     path.write_text("\n".join(new_lines), encoding="utf-8")
 
 
@@ -94,16 +88,10 @@ def main():
         podcast_name = path.parent.name.replace("-", " ").title()
         episode_title = path.stem.split("--", 1)[-1].replace("-", " ").title()
 
-        # Extract transcript text
-        text = path.read_text(encoding="utf-8")
-        marker = "## Full Transcript"
-        if marker not in text:
-            print(f"[{i}/{total}] SKIP (no transcript): {path.name}")
-            continue
-
-        transcript = text.split(marker, 1)[1].strip()
+        # Read transcript from the raw/ corpus
+        transcript = metrics_mod.extract_transcript(path)
         if not transcript:
-            print(f"[{i}/{total}] SKIP (empty transcript): {path.name}")
+            print(f"[{i}/{total}] SKIP (no raw transcript): {path.name}")
             continue
 
         print(f"[{i}/{total}] Summarizing: {path.name}", flush=True)
