@@ -600,9 +600,13 @@ th:first-child,td:first-child{{text-align:left}}
 th abbr{{text-decoration:underline dotted;cursor:help}}
 td.adjusted{{font-weight:600;color:#0a7}}
 .spark{{font-family:monospace;font-size:18px;letter-spacing:0}}
-#search-box{{display:block;width:100%;padding:.6em .9em;margin:1em 0;font-size:15px;border:1px solid #ccc;border-radius:6px;font-family:inherit}}
+#search-mode{{display:flex;gap:.4em;margin:1em 0 .3em}}
+#search-mode button{{padding:.3em .8em;font-size:13px;border:1px solid #ccc;border-radius:6px;background:#fff;cursor:pointer;font-family:inherit;color:#555}}
+#search-mode button.active{{background:#2563eb;color:#fff;border-color:#2563eb}}
+#search-box{{display:block;width:100%;padding:.6em .9em;margin:.3em 0 1em;font-size:15px;border:1px solid #ccc;border-radius:6px;font-family:inherit}}
 #search-results{{margin:1em 0}}
 .result{{padding:8px 0;border-bottom:1px solid #eee}}
+.result mark{{background:#fde68a;color:inherit;padding:0 .1em;border-radius:2px}}
 .result .meta{{font-size:12px;color:#888;display:flex;gap:.8em;flex-wrap:wrap;margin-bottom:.2em}}
 .result .meta .score{{color:#0a7;font-weight:600}}
 .result .text{{font-size:14px;color:#333}}
@@ -619,6 +623,10 @@ details dd{{margin:0 0 0 1em;color:#555}}
 </style></head><body>
 <h1>Signal Dashboard — {today.isoformat()}</h1>
 <p class="muted">Window: {window_days}d · Drift: {drift_days}d vs prior · {len(windowed)} episodes · {len(aggs)} podcasts · <a href='entities.html'>Cross-episode mentions →</a></p>
+<div id="search-mode">
+<button data-mode="summaries" class="active">Summaries</button>
+<button data-mode="transcripts">Transcripts</button>
+</div>
 <input id="search-box" type="search" placeholder="Search across all episodes — e.g. &quot;pricing AI products&quot;, &quot;remote teams&quot;, &quot;constitutional AI&quot;" autocomplete="off">
 <div id="search-results"></div>
 <details open><summary>Column definitions</summary>
@@ -670,6 +678,9 @@ details dd{{margin:0 0 0 1em;color:#555}}
       const slug = r.podcast_slug || '';
       const title = esc(r.episode_title || '(untitled)');
       const path = esc(r.path || '');
+      const bodyHtml = (r.snippet != null)
+        ? esc(r.snippet).replace(/&lt;mark&gt;/g, '<mark>').replace(/&lt;\\/mark&gt;/g, '</mark>')
+        : esc(r.text || '');
       return `<div class="result">
         <div class="meta">
           <span class="score">${{r.score.toFixed(3)}}</span>
@@ -678,17 +689,20 @@ details dd{{margin:0 0 0 1em;color:#555}}
           <span>${{esc(r.date || '')}}</span>
         </div>
         <div class="title"><a href="/${{path}}" target="_blank">${{title}}</a></div>
-        <div class="text">${{esc(r.text || '')}}</div>
+        <div class="text">${{bodyHtml}}</div>
       </div>`;
     }}).join('');
   }};
+
+  let mode = 'summaries';
 
   const run = debounce(async () => {{
     const q = box.value.trim();
     if (q.length < 3) {{ out.innerHTML = ''; return; }}
     out.innerHTML = '<p class="muted">Searching…</p>';
+    const endpoint = mode === 'transcripts' ? '/api/search/transcripts' : '/api/search';
     try {{
-      const res = await fetch('/api/search?q=' + encodeURIComponent(q) + '&k=20');
+      const res = await fetch(endpoint + '?q=' + encodeURIComponent(q) + '&k=20');
       if (!res.ok) {{ out.innerHTML = '<p class="muted">Search unavailable (start serve.py).</p>'; return; }}
       const data = await res.json();
       if (data.error) {{ out.innerHTML = `<p class="muted">${{esc(data.error)}}</p>`; return; }}
@@ -697,6 +711,13 @@ details dd{{margin:0 0 0 1em;color:#555}}
   }}, 250);
 
   box.addEventListener('input', run);
+
+  const modeBtns = document.querySelectorAll('#search-mode button');
+  modeBtns.forEach(b => b.addEventListener('click', () => {{
+    mode = b.dataset.mode;
+    modeBtns.forEach(x => x.classList.toggle('active', x === b));
+    run();
+  }}));
 }})();
 </script>
 </body></html>
