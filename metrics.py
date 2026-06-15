@@ -13,6 +13,7 @@ import yaml
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 SCHEMA_VERSION = 1
+BASE_DIR = Path(__file__).parent
 
 log = logging.getLogger("metrics")
 
@@ -55,12 +56,13 @@ def extract_sections(markdown_text, section_headings=None):
     return sections
 
 
-def extract_transcript(markdown_text):
-    marker = "## Full Transcript"
-    idx = markdown_text.find(marker)
-    if idx < 0:
+def extract_transcript(md_path):
+    """Read the episode's raw transcript from the raw/ corpus (sibling of the .md)."""
+    raw = BASE_DIR / "raw" / md_path.parent.name / (md_path.stem + ".txt")
+    try:
+        return raw.read_text(encoding="utf-8").strip()
+    except OSError:
         return ""
-    return markdown_text[idx + len(marker):].strip()
 
 
 def parse_duration_to_seconds(duration_str):
@@ -90,7 +92,7 @@ def parse_episode(md_path):
 
     frontmatter, body = parse_frontmatter(text)
     sections = extract_sections(body)
-    transcript = extract_transcript(body)
+    transcript = extract_transcript(md_path)
 
     return {
         "path": md_path,
