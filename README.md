@@ -1,6 +1,6 @@
 # Podcast Ripper
 
-Local podcast transcription and summarization pipeline. Fetches new episodes from RSS feeds, transcribes with whisper.cpp, summarizes with a local LLM via Ollama, and outputs structured markdown.
+Local podcast transcription and summarization pipeline. Fetches new episodes from RSS feeds, transcribes with Faster Whisper, summarizes with a local LLM via Ollama, and outputs structured markdown.
 
 Everything runs locally — no external APIs.
 
@@ -13,23 +13,30 @@ Everything runs locally — no external APIs.
 
 ## Setup
 
+### Quick install (recommended)
+
+```bash
+./install.sh
+```
+
+Installs dependencies, creates `config.yaml`, pulls the summarization model,
+and optionally schedules a daily run (asking what time, and offering a matching
+system wake so a sleeping Mac still runs on time). Safe to re-run. The manual
+steps below are the equivalent done by hand.
+
 ### 1. Install dependencies
 
 ```bash
-brew install whisper-cpp ffmpeg
-pip3 install feedparser pyyaml
+brew install ffmpeg
+pip3 install -r requirements.txt
 ```
 
-### 2. Download the whisper model
+Transcription uses [Faster Whisper](https://github.com/SYSTRAN/faster-whisper),
+which downloads its model automatically on the first run (the `large-v3-turbo`
+default is ~1.6 GB). Set `whisper_model` in `config.yaml` to a smaller model
+such as `medium` for faster but less accurate transcription.
 
-```bash
-curl -L -o /opt/homebrew/share/whisper-cpp/models/ggml-medium.bin \
-  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin
-```
-
-This is ~1.5 GB. Use `ggml-base.bin` instead for faster but less accurate transcription.
-
-### 3. Pull the summarization model
+### 2. Pull the summarization model
 
 ```bash
 ollama pull gemma3
@@ -37,7 +44,7 @@ ollama pull gemma3
 
 Make sure Ollama is running (`ollama serve` or the Ollama desktop app).
 
-### 4. Add your podcasts
+### 3. Add your podcasts
 
 ```bash
 cp config.example.yaml config.yaml
