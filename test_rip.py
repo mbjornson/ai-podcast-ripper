@@ -505,6 +505,7 @@ Long transcript here.
 
 
 class TestMainDigestWiring:
+    @patch("transcript_search.build_index")
     @patch("rip.generate_digest")
     @patch("rip.process_episode")
     @patch("rip.get_new_episodes")
@@ -513,7 +514,7 @@ class TestMainDigestWiring:
     @patch("rip.load_config")
     def test_calls_digest_when_enabled(self, mock_config, mock_load_state,
                                         mock_save, mock_get_eps, mock_process,
-                                        mock_digest):
+                                        mock_digest, mock_build):
         mock_config.return_value = {
             "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
             "settings": {"max_episodes_per_feed": 3},
@@ -531,6 +532,7 @@ class TestMainDigestWiring:
         assert call_args[0] == [("TestPod", "Ep1", ep_path)]
         assert call_args[1]["enabled"] is True
 
+    @patch("transcript_search.build_index")
     @patch("rip.generate_digest")
     @patch("rip.process_episode")
     @patch("rip.get_new_episodes")
@@ -539,7 +541,7 @@ class TestMainDigestWiring:
     @patch("rip.load_config")
     def test_skips_digest_when_disabled(self, mock_config, mock_load_state,
                                          mock_save, mock_get_eps, mock_process,
-                                         mock_digest):
+                                         mock_digest, mock_build):
         mock_config.return_value = {
             "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
             "settings": {"max_episodes_per_feed": 3},
@@ -553,6 +555,7 @@ class TestMainDigestWiring:
 
         mock_digest.assert_not_called()
 
+    @patch("transcript_search.build_index")
     @patch("rip.generate_digest")
     @patch("rip.process_episode")
     @patch("rip.get_new_episodes")
@@ -561,7 +564,7 @@ class TestMainDigestWiring:
     @patch("rip.load_config")
     def test_skips_digest_when_no_episodes(self, mock_config, mock_load_state,
                                             mock_save, mock_get_eps, mock_process,
-                                            mock_digest):
+                                            mock_digest, mock_build):
         mock_config.return_value = {
             "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
             "settings": {"max_episodes_per_feed": 3},
@@ -573,6 +576,46 @@ class TestMainDigestWiring:
         rip.main()
 
         mock_digest.assert_not_called()
+
+
+class TestMainTranscriptIndexWiring:
+    @patch("transcript_search.build_index")
+    @patch("rip.process_episode")
+    @patch("rip.get_new_episodes")
+    @patch("rip.save_state")
+    @patch("rip.load_state", return_value={})
+    @patch("rip.load_config")
+    def test_builds_index_when_enabled(self, mock_config, mock_load_state, mock_save,
+                                       mock_get_eps, mock_process, mock_build):
+        mock_config.return_value = {
+            "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
+            "settings": {"max_episodes_per_feed": 3},
+            "summary": {},
+            "search": {"transcript_index": True},
+        }
+        mock_get_eps.return_value = [{"title": "Ep1", "guid": "g1"}]
+        mock_process.return_value = Path("/tmp/fake.md")
+        rip.main()
+        mock_build.assert_called_once()
+
+    @patch("transcript_search.build_index")
+    @patch("rip.process_episode")
+    @patch("rip.get_new_episodes")
+    @patch("rip.save_state")
+    @patch("rip.load_state", return_value={})
+    @patch("rip.load_config")
+    def test_skips_index_when_disabled(self, mock_config, mock_load_state, mock_save,
+                                       mock_get_eps, mock_process, mock_build):
+        mock_config.return_value = {
+            "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
+            "settings": {"max_episodes_per_feed": 3},
+            "summary": {},
+            "search": {"transcript_index": False},
+        }
+        mock_get_eps.return_value = [{"title": "Ep1", "guid": "g1"}]
+        mock_process.return_value = Path("/tmp/fake.md")
+        rip.main()
+        mock_build.assert_not_called()
 
 
 class TestSaveLoadState:

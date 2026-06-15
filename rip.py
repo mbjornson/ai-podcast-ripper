@@ -427,6 +427,18 @@ def process_episode(episode, feed_name, settings):
                 f.unlink(missing_ok=True)
 
 
+def update_transcript_index(config):
+    """Incrementally update the FTS5 transcript index unless disabled in config."""
+    if not config.get("search", {}).get("transcript_index", True):
+        return
+    try:
+        # Local import keeps startup light; build is incremental (new raw files only).
+        import transcript_search as tsearch_mod  # pylint: disable=import-outside-toplevel
+        tsearch_mod.build_index()
+    except Exception:
+        log.exception("Transcript index update failed")
+
+
 def main():
     config = load_config()
     feeds = config.get("feeds") or []
@@ -483,6 +495,8 @@ def main():
             dashboard_mod.generate()
         except Exception:
             log.exception("Dashboard generation failed")
+
+    update_transcript_index(config)
 
     log.info("Done. Processed %d episode(s).", total_processed)
 
