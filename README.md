@@ -76,7 +76,24 @@ Transcripts are saved as markdown in:
 transcripts/<podcast-name>/<publish-date>--<episode-title>.md
 ```
 
-Each file includes YAML frontmatter, a summary, key points, notable quotes, action items, and the full transcript.
+Each file includes YAML frontmatter, a summary, key points, notable quotes, and action items.
+
+### Raw transcript corpus
+
+The full plain-text transcript of every episode is stored separately under:
+
+```
+raw/<podcast-name>/<publish-date>--<episode-title>.txt
+```
+
+This keeps the markdown summary-focused and provides a clean corpus for search and analysis. New episodes write both files automatically. To migrate an existing library (move embedded transcripts out of the markdown into `raw/`), run once:
+
+```bash
+cp -r transcripts transcripts.bak   # one-time safety net (transcripts/ is gitignored)
+python3 migrate_raw_transcripts.py
+```
+
+The migration is idempotent and re-runnable.
 
 ## Daily Digest
 
@@ -95,6 +112,17 @@ digest:
 
 The digest includes Summary, Key Points, and Action Items by default (configurable via `digest.sections`). Full transcripts are excluded.
 
+## Keyword search
+
+Full-text keyword search across all raw transcripts, backed by SQLite FTS5 (built into Python — no extra dependencies):
+
+```bash
+python3 transcript_search.py --index             # build/update the index
+python3 transcript_search.py "pricing strategy"   # query from the CLI
+```
+
+The index also updates at the end of each `rip.py` run. In the dashboard (`python3 serve.py`), the search box has a **Summaries / Transcripts** toggle — "Transcripts" searches the full conversation text, complementing the semantic search over summaries.
+
 ## Configuration
 
 All settings live in `config.yaml`:
@@ -109,6 +137,7 @@ All settings live in `config.yaml`:
 | `digest.enabled` | `false` | Generate a daily digest after each run |
 | `digest.sections` | `[Summary, Key Points, Action Items]` | Which sections to include |
 | `digest.output_dir` | `digests` | Subdirectory under `transcripts/` |
+| `search.transcript_index` | `true` | Build/update the FTS5 keyword index over `raw/` each run |
 
 ## Development
 

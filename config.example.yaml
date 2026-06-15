@@ -36,3 +36,6 @@ digest:
     - "Key Points"
     - "Action Items"
   output_dir: "digests"
+
+search:
+  transcript_index: true  # build/update the SQLite FTS5 keyword index over raw/ each run
