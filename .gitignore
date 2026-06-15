@@ -2,6 +2,7 @@ tmp/
 transcripts/
 state.json
 config.yaml
+/com.shapeandship.podcast-ripper.plist
 metrics.jsonl
 metrics.*.jsonl
 ratings.jsonl

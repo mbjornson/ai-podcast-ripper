@@ -114,12 +114,20 @@ git config core.hooksPath .githooks
 
 ## Daily scheduling (optional)
 
-To run automatically at midnight:
+To run automatically at midnight, generate a LaunchAgent from the template,
+substituting in your own paths. Run this from the repo root:
 
 ```bash
-cp com.shapeandship.podcast-ripper.plist ~/Library/LaunchAgents/
+sed -e "s|__HOME__|$HOME|g" \
+    -e "s|__PROJECT_DIR__|$PWD|g" \
+    -e "s|__PYTHON_BIN__|$(which python3)|g" \
+    com.shapeandship.podcast-ripper.plist.example \
+    > ~/Library/LaunchAgents/com.shapeandship.podcast-ripper.plist
 launchctl load ~/Library/LaunchAgents/com.shapeandship.podcast-ripper.plist
 ```
+
+The template wraps the run in `caffeinate -i -s`, so the Mac stays awake for
+the whole batch and sleeps again once it finishes.
 
 Check logs at `~/Library/Logs/podcast-ripper.log`.
 
@@ -127,4 +135,11 @@ To stop:
 
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.shapeandship.podcast-ripper.plist
+```
+
+**On a laptop that sleeps overnight**, also schedule a wake a few minutes
+before the run so the Mac is up when the job fires:
+
+```bash
+sudo pmset repeat wakeorpoweron MTWRFSU 23:55:00
 ```
