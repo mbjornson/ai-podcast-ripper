@@ -6,8 +6,14 @@
     <string>com.shapeandship.podcast-ripper</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/matt/.pyenv/versions/3.14.0/bin/python3</string>
-        <string>/Users/matt/Projects/podcast-ripper/rip.py</string>
+        <!-- caffeinate (-i idle, -s system) keeps the Mac awake for the whole
+             run and releases the moment rip.py exits. Prevents sleep from
+             freezing a long transcription mid-batch. -->
+        <string>/usr/bin/caffeinate</string>
+        <string>-i</string>
+        <string>-s</string>
+        <string>__PYTHON_BIN__</string>
+        <string>__PROJECT_DIR__/rip.py</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>
@@ -17,11 +23,11 @@
         <integer>0</integer>
     </dict>
     <key>StandardOutPath</key>
-    <string>/Users/matt/Library/Logs/podcast-ripper.log</string>
+    <string>__HOME__/Library/Logs/podcast-ripper.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/matt/Library/Logs/podcast-ripper.log</string>
+    <string>__HOME__/Library/Logs/podcast-ripper.log</string>
     <key>WorkingDirectory</key>
-    <string>/Users/matt/Projects/podcast-ripper</string>
+    <string>__PROJECT_DIR__</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
