@@ -23,6 +23,7 @@ BASE_DIR = Path(__file__).parent
 CONFIG_PATH = BASE_DIR / "config.yaml"
 STATE_PATH = BASE_DIR / "state.json"
 TRANSCRIPTS_DIR = BASE_DIR / "transcripts"
+RAW_DIR = BASE_DIR / "raw"
 TMP_DIR = BASE_DIR / "tmp"
 METRICS_PATH = BASE_DIR / "metrics.jsonl"
 
@@ -57,6 +58,11 @@ def slugify(text):
     text = text.lower().strip()
     text = re.sub(r"[^\w\s-]", "", text)
     return re.sub(r"[-\s]+", "-", text)[:80]
+
+
+def raw_path_for_md(md_path):
+    """Map transcripts/<slug>/<stem>.md -> raw/<slug>/<stem>.txt."""
+    return RAW_DIR / md_path.parent.name / (md_path.stem + ".txt")
 
 
 NON_RSS_DOMAINS = ["spotify.com", "apple.com/podcast", "youtube.com", "youtu.be"]
@@ -244,7 +250,7 @@ def parse_episode_date(published):
         return date.today().isoformat()
 
 
-def write_markdown(output_path, podcast_name, episode, duration, transcript, summary):
+def write_markdown(output_path, podcast_name, episode, duration, summary):
     episode_date = parse_episode_date(episode.get("published", ""))
     content = f"""---
 podcast: "{podcast_name}"
@@ -257,10 +263,6 @@ url: "{episode.get('link', '')}"
 # {episode['title']} — {podcast_name}
 
 {summary or "*(summarization unavailable)*"}
-
-## Full Transcript
-
-{transcript}
 """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(content)
@@ -407,7 +409,10 @@ def process_episode(episode, feed_name, settings):
         podcast_slug = slugify(feed_name)
         ep_slug = slugify(episode["title"])
         output_path = TRANSCRIPTS_DIR / podcast_slug / f"{ep_date}--{ep_slug}.md"
-        write_markdown(output_path, feed_name, episode, duration, transcript, summary)
+        raw_path = raw_path_for_md(output_path)
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_path.write_text(transcript, encoding="utf-8")
+        write_markdown(output_path, feed_name, episode, duration, summary)
 
         record_episode_metrics(
             output_path, feed_name, podcast_slug, settings,
@@ -420,6 +425,18 @@ def process_episode(episode, feed_name, settings):
             audio_path.unlink(missing_ok=True)
             for f in TMP_DIR.glob(f"{slug}*"):
                 f.unlink(missing_ok=True)
+
+
+def update_transcript_index(config):
+    """Incrementally update the FTS5 transcript index unless disabled in config."""
+    if not config.get("search", {}).get("transcript_index", True):
+        return
+    try:
+        # Local import keeps startup light; build is incremental (new raw files only).
+        import transcript_search as tsearch_mod  # pylint: disable=import-outside-toplevel
+        tsearch_mod.build_index()
+    except Exception:
+        log.exception("Transcript index update failed")
 
 
 def main():
@@ -478,6 +495,8 @@ def main():
             dashboard_mod.generate()
         except Exception:
             log.exception("Dashboard generation failed")
+
+    update_transcript_index(config)
 
     log.info("Done. Processed %d episode(s).", total_processed)
 

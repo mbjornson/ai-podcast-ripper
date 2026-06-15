@@ -17,6 +17,7 @@ from flask import Flask, jsonify, request, send_from_directory
 import dashboard as dashboard_mod
 import metrics as metrics_mod
 import search as search_mod
+import transcript_search as tsearch_mod
 
 try:
     import entities as entities_mod
@@ -135,6 +136,24 @@ def api_search():
     podcast = request.args.get("podcast") or None
     try:
         results = search_mod.search(q, k=k, podcast_slug=podcast)
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 503
+    return jsonify(results)
+
+
+@app.route("/api/search/transcripts", methods=["GET"])
+def api_search_transcripts():
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify([])
+    try:
+        k = int(request.args.get("k", "20"))
+    except ValueError:
+        k = 20
+    k = max(1, min(k, 50))
+    podcast = request.args.get("podcast") or None
+    try:
+        results = tsearch_mod.search(q, k=k, podcast_slug=podcast)
     except FileNotFoundError as e:
         return jsonify({"error": str(e)}), 503
     return jsonify(results)

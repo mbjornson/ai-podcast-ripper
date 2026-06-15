@@ -124,7 +124,7 @@ class TestComputeHeuristics:
             "frontmatter": {"podcast": "Test Pod", "episode": "An Episode Title",
                             "date": "2026-06-10", "duration": "1:14:58"},
             "sections": metrics.extract_sections(body),
-            "transcript": metrics.extract_transcript(body),
+            "transcript": "Lorem ipsum transcript text.",
         }
 
     def test_action_items_counted(self):
@@ -216,14 +216,28 @@ class TestParseJudgeResponse:
 
 
 class TestParseEpisode:
-    def test_reads_file(self, tmp_path):
-        path = tmp_path / "ep.md"
-        path.write_text(FIXTURE_MD, encoding="utf-8")
-        parsed = metrics.parse_episode(path)
+    def test_reads_transcript_from_raw_corpus(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(metrics, "BASE_DIR", tmp_path)
+        md_path = tmp_path / "transcripts" / "test-pod" / "2026-06-10--an-episode.md"
+        md_path.parent.mkdir(parents=True)
+        md_path.write_text(FIXTURE_MD, encoding="utf-8")
+        raw_path = tmp_path / "raw" / "test-pod" / "2026-06-10--an-episode.txt"
+        raw_path.parent.mkdir(parents=True)
+        raw_path.write_text("Raw transcript body from corpus.", encoding="utf-8")
+        parsed = metrics.parse_episode(md_path)
         assert parsed is not None
         assert parsed["frontmatter"]["podcast"] == "Test Pod"
         assert "Summary" in parsed["sections"]
-        assert "Lorem ipsum" in parsed["transcript"]
+        assert parsed["transcript"] == "Raw transcript body from corpus."
+
+    def test_missing_raw_transcript_is_empty(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(metrics, "BASE_DIR", tmp_path)
+        md_path = tmp_path / "transcripts" / "pod" / "2026-06-10--ep.md"
+        md_path.parent.mkdir(parents=True)
+        md_path.write_text(FIXTURE_MD, encoding="utf-8")
+        parsed = metrics.parse_episode(md_path)
+        assert parsed is not None
+        assert parsed["transcript"] == ""
 
     def test_missing_file_returns_none(self, tmp_path):
         assert metrics.parse_episode(tmp_path / "missing.md") is None

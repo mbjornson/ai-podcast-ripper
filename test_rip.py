@@ -237,7 +237,7 @@ class TestWriteMarkdown:
             "published": "Sat, 18 May 2026 00:00:00 GMT",
             "link": "http://example.com/ep",
         }
-        rip.write_markdown(output, "Test Pod", episode, "45:00", "transcript here", "## Summary\nGood stuff")
+        rip.write_markdown(output, "Test Pod", episode, "45:00", "## Summary\nGood stuff")
         assert output.exists()
         content = output.read_text()
         assert 'podcast: "Test Pod"' in content
@@ -245,21 +245,35 @@ class TestWriteMarkdown:
         assert "date: 2026-05-18" in content
         assert 'duration: "45:00"' in content
         assert "## Summary\nGood stuff" in content
-        assert "transcript here" in content
+        assert "## Full Transcript" not in content
 
     def test_handles_missing_summary(self, tmp_path):
         output = tmp_path / "test.md"
         episode = {"title": "Ep", "published": "", "link": ""}
-        rip.write_markdown(output, "Pod", episode, "0:00", "text", None)
+        rip.write_markdown(output, "Pod", episode, "0:00", None)
         content = output.read_text()
         assert "*(summarization unavailable)*" in content
+
+
+class TestRawPath:
+    def test_maps_md_to_raw_txt(self):
+        md = rip.TRANSCRIPTS_DIR / "test-pod" / "2026-05-18--test-ep.md"
+        assert rip.raw_path_for_md(md) == rip.RAW_DIR / "test-pod" / "2026-05-18--test-ep.txt"
+
+    def test_lives_under_raw_dir_with_txt_suffix(self):
+        raw = rip.raw_path_for_md(rip.TRANSCRIPTS_DIR / "pod" / "2026-01-01--ep.md")
+        assert rip.RAW_DIR in raw.parents
+        assert raw.suffix == ".txt"
 
 
 class TestProcessEpisode:
     @patch("rip.fetch_transcript")
     @patch("rip.summarize", return_value="## Summary\nTest summary")
     @patch("rip.write_markdown")
-    def test_uses_existing_transcript(self, mock_write, mock_summarize, mock_fetch):
+    def test_uses_existing_transcript(self, mock_write, mock_summarize, mock_fetch,
+                                      tmp_path, monkeypatch):
+        monkeypatch.setattr(rip, "TRANSCRIPTS_DIR", tmp_path / "transcripts")
+        monkeypatch.setattr(rip, "RAW_DIR", tmp_path / "raw")
         mock_fetch.return_value = "Pre-existing transcript text"
         episode = {
             "title": "Ep With Transcript",
@@ -280,6 +294,9 @@ class TestProcessEpisode:
         mock_fetch.assert_called_once_with("http://example.com/transcript.txt", "text/plain")
         mock_summarize.assert_called_once()
         assert "Pre-existing transcript text" in mock_summarize.call_args[0][0]
+        raw_files = list((tmp_path / "raw").rglob("*.txt"))
+        assert len(raw_files) == 1
+        assert raw_files[0].read_text(encoding="utf-8") == "Pre-existing transcript text"
 
     @patch("rip.fetch_transcript", return_value=None)
     @patch("rip.download_audio")
@@ -288,7 +305,10 @@ class TestProcessEpisode:
     @patch("rip.summarize", return_value="## Summary\nTest")
     @patch("rip.write_markdown")
     def test_falls_back_to_audio(self, mock_write, mock_summarize, mock_transcribe,
-                                  mock_duration, mock_download, mock_fetch):
+                                  mock_duration, mock_download, mock_fetch,
+                                  tmp_path, monkeypatch):
+        monkeypatch.setattr(rip, "TRANSCRIPTS_DIR", tmp_path / "transcripts")
+        monkeypatch.setattr(rip, "RAW_DIR", tmp_path / "raw")
         episode = {
             "title": "Ep Without Transcript",
             "audio_url": "http://example.com/ep.mp3",
@@ -307,6 +327,9 @@ class TestProcessEpisode:
         assert isinstance(result, Path)
         mock_download.assert_called_once()
         mock_transcribe.assert_called_once()
+        raw_files = list((tmp_path / "raw").rglob("*.txt"))
+        assert len(raw_files) == 1
+        assert raw_files[0].read_text(encoding="utf-8") == "Whisper transcript"
 
     @patch("rip.fetch_transcript", return_value=None)
     @patch("rip.download_audio")
@@ -482,6 +505,7 @@ Long transcript here.
 
 
 class TestMainDigestWiring:
+    @patch("transcript_search.build_index")
     @patch("rip.generate_digest")
     @patch("rip.process_episode")
     @patch("rip.get_new_episodes")
@@ -490,7 +514,7 @@ class TestMainDigestWiring:
     @patch("rip.load_config")
     def test_calls_digest_when_enabled(self, mock_config, mock_load_state,
                                         mock_save, mock_get_eps, mock_process,
-                                        mock_digest):
+                                        mock_digest, mock_build):
         mock_config.return_value = {
             "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
             "settings": {"max_episodes_per_feed": 3},
@@ -508,6 +532,7 @@ class TestMainDigestWiring:
         assert call_args[0] == [("TestPod", "Ep1", ep_path)]
         assert call_args[1]["enabled"] is True
 
+    @patch("transcript_search.build_index")
     @patch("rip.generate_digest")
     @patch("rip.process_episode")
     @patch("rip.get_new_episodes")
@@ -516,7 +541,7 @@ class TestMainDigestWiring:
     @patch("rip.load_config")
     def test_skips_digest_when_disabled(self, mock_config, mock_load_state,
                                          mock_save, mock_get_eps, mock_process,
-                                         mock_digest):
+                                         mock_digest, mock_build):
         mock_config.return_value = {
             "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
             "settings": {"max_episodes_per_feed": 3},
@@ -530,6 +555,7 @@ class TestMainDigestWiring:
 
         mock_digest.assert_not_called()
 
+    @patch("transcript_search.build_index")
     @patch("rip.generate_digest")
     @patch("rip.process_episode")
     @patch("rip.get_new_episodes")
@@ -538,7 +564,7 @@ class TestMainDigestWiring:
     @patch("rip.load_config")
     def test_skips_digest_when_no_episodes(self, mock_config, mock_load_state,
                                             mock_save, mock_get_eps, mock_process,
-                                            mock_digest):
+                                            mock_digest, mock_build):
         mock_config.return_value = {
             "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
             "settings": {"max_episodes_per_feed": 3},
@@ -550,6 +576,46 @@ class TestMainDigestWiring:
         rip.main()
 
         mock_digest.assert_not_called()
+
+
+class TestMainTranscriptIndexWiring:
+    @patch("transcript_search.build_index")
+    @patch("rip.process_episode")
+    @patch("rip.get_new_episodes")
+    @patch("rip.save_state")
+    @patch("rip.load_state", return_value={})
+    @patch("rip.load_config")
+    def test_builds_index_when_enabled(self, mock_config, mock_load_state, mock_save,
+                                       mock_get_eps, mock_process, mock_build):
+        mock_config.return_value = {
+            "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
+            "settings": {"max_episodes_per_feed": 3},
+            "summary": {},
+            "search": {"transcript_index": True},
+        }
+        mock_get_eps.return_value = [{"title": "Ep1", "guid": "g1"}]
+        mock_process.return_value = Path("/tmp/fake.md")
+        rip.main()
+        mock_build.assert_called_once()
+
+    @patch("transcript_search.build_index")
+    @patch("rip.process_episode")
+    @patch("rip.get_new_episodes")
+    @patch("rip.save_state")
+    @patch("rip.load_state", return_value={})
+    @patch("rip.load_config")
+    def test_skips_index_when_disabled(self, mock_config, mock_load_state, mock_save,
+                                       mock_get_eps, mock_process, mock_build):
+        mock_config.return_value = {
+            "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
+            "settings": {"max_episodes_per_feed": 3},
+            "summary": {},
+            "search": {"transcript_index": False},
+        }
+        mock_get_eps.return_value = [{"title": "Ep1", "guid": "g1"}]
+        mock_process.return_value = Path("/tmp/fake.md")
+        rip.main()
+        mock_build.assert_not_called()
 
 
 class TestSaveLoadState:

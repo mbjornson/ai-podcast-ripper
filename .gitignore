@@ -1,5 +1,6 @@
 tmp/
 transcripts/
+raw/
 state.json
 config.yaml
 /com.shapeandship.podcast-ripper.plist
@@ -8,6 +9,7 @@ metrics.*.jsonl
 ratings.jsonl
 entities.jsonl
 .search_index/
+.transcript_index.db
 *.wav
 *.mp3
 __pycache__/
