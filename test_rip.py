@@ -1,6 +1,7 @@
 """Tests for rip.py"""
 
-from datetime import date
+import json
+from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -469,6 +470,77 @@ Long transcript here.
         assert "### Episode 1" in content
         assert "### Episode 2" in content
 
+
+class TestCollectDigestEpisodes:
+    """collect_digest_episodes keys on the processing timestamp (ts), not the
+    episode publish date (date), so a run's output can be rebuilt from disk."""
+
+    @staticmethod
+    def _write_metrics(path, records):
+        path.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+
+    def test_filters_by_local_processing_date(self, tmp_path, monkeypatch):
+        metrics = tmp_path / "metrics.jsonl"
+        monkeypatch.setattr(rip, "METRICS_PATH", metrics)
+        # Build ts in the LOCAL tz so .date() is deterministic on any machine.
+        today_ts = datetime(2026, 6, 16, 10, 0).astimezone().isoformat()
+        other_ts = datetime(2026, 6, 14, 10, 0).astimezone().isoformat()
+        self._write_metrics(metrics, [
+            # publish 'date' is years old and must be IGNORED in favor of ts
+            {"ts": today_ts, "date": "2025-06-16", "podcast": "Dive Club",
+             "episode_title": "Raycast", "path": "/abs/dive-club/raycast.md"},
+            {"ts": today_ts, "date": "2024-07-25", "podcast": "HTOTW",
+             "episode_title": "Michael Jordan", "path": "/abs/htotw/mj.md"},
+            {"ts": other_ts, "date": "2026-06-14", "podcast": "Old",
+             "episode_title": "Yesterday", "path": "/abs/old/y.md"},
+        ])
+
+        eps = rip.collect_digest_episodes(date(2026, 6, 16))
+
+        assert [(pod, title) for pod, title, _ in eps] == [
+            ("Dive Club", "Raycast"),
+            ("HTOTW", "Michael Jordan"),
+        ]
+        assert all(isinstance(p, Path) for _, _, p in eps)
+
+    def test_dedupes_repeated_path_keeping_latest(self, tmp_path, monkeypatch):
+        metrics = tmp_path / "metrics.jsonl"
+        monkeypatch.setattr(rip, "METRICS_PATH", metrics)
+        ts1 = datetime(2026, 6, 16, 9, 0).astimezone().isoformat()
+        ts2 = datetime(2026, 6, 16, 11, 0).astimezone().isoformat()
+        self._write_metrics(metrics, [
+            {"ts": ts1, "podcast": "Pod", "episode_title": "First take", "path": "/abs/pod/ep.md"},
+            {"ts": ts2, "podcast": "Pod", "episode_title": "Reprocessed", "path": "/abs/pod/ep.md"},
+        ])
+
+        eps = rip.collect_digest_episodes(date(2026, 6, 16))
+
+        assert len(eps) == 1
+        assert eps[0][1] == "Reprocessed"
+
+    def test_missing_metrics_returns_empty(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(rip, "METRICS_PATH", tmp_path / "nope.jsonl")
+        assert not rip.collect_digest_episodes(date(2026, 6, 16))
+
+
+class TestGenerateDigestTargetDate:
+    def test_writes_file_named_for_target_date_not_today(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(rip, "TRANSCRIPTS_DIR", tmp_path)
+        ep = tmp_path / "ep.md"
+        ep.write_text("## Summary\nBackfilled summary\n")
+
+        rip.generate_digest(
+            [("Pod", "Old Episode", ep)],
+            {"sections": ["Summary"], "output_dir": "digests"},
+            target_date=date(2026, 6, 15),
+        )
+
+        digest_path = tmp_path / "digests" / "2026-06-15.md"
+        assert digest_path.exists()
+        content = digest_path.read_text()
+        assert "date: 2026-06-15" in content
+        assert "# Daily Digest — 2026-06-15" in content
+
     def test_handles_unreadable_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(rip, "TRANSCRIPTS_DIR", tmp_path)
 
@@ -506,33 +578,39 @@ Long transcript here.
 
 class TestMainDigestWiring:
     @patch("transcript_search.build_index")
+    @patch("rip.collect_digest_episodes")
     @patch("rip.generate_digest")
     @patch("rip.process_episode")
     @patch("rip.get_new_episodes")
     @patch("rip.save_state")
     @patch("rip.load_state", return_value={})
     @patch("rip.load_config")
-    def test_calls_digest_when_enabled(self, mock_config, mock_load_state,
-                                        mock_save, mock_get_eps, mock_process,
-                                        mock_digest, mock_build):
+    def test_digests_episodes_ripped_today_not_this_runs_list(
+            self, mock_config, mock_load_state, mock_save, mock_get_eps,
+            mock_process, mock_digest, mock_collect, mock_build):
         mock_config.return_value = {
             "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
             "settings": {"max_episodes_per_feed": 3},
             "summary": {},
             "digest": {"enabled": True, "sections": ["Summary"], "output_dir": "digests"},
         }
-        ep_path = Path("/tmp/fake-ep.md")
         mock_get_eps.return_value = [{"title": "Ep1", "guid": "g1"}]
-        mock_process.return_value = ep_path
+        mock_process.return_value = Path("/tmp/fake-ep.md")
+        # Digest content comes from metrics (today's rips), independent of this run.
+        from_disk = [("TestPod", "Ep from disk", Path("/tmp/disk-ep.md"))]
+        mock_collect.return_value = from_disk
 
-        rip.main()
+        rip.main([])
 
+        mock_collect.assert_called_once_with(date.today())
         mock_digest.assert_called_once()
-        call_args = mock_digest.call_args[0]
-        assert call_args[0] == [("TestPod", "Ep1", ep_path)]
-        assert call_args[1]["enabled"] is True
+        args, kwargs = mock_digest.call_args
+        assert args[0] == from_disk
+        assert args[1]["enabled"] is True
+        assert kwargs["target_date"] == date.today()
 
     @patch("transcript_search.build_index")
+    @patch("rip.collect_digest_episodes")
     @patch("rip.generate_digest")
     @patch("rip.process_episode")
     @patch("rip.get_new_episodes")
@@ -541,7 +619,7 @@ class TestMainDigestWiring:
     @patch("rip.load_config")
     def test_skips_digest_when_disabled(self, mock_config, mock_load_state,
                                          mock_save, mock_get_eps, mock_process,
-                                         mock_digest, mock_build):
+                                         mock_digest, mock_collect, mock_build):
         mock_config.return_value = {
             "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
             "settings": {"max_episodes_per_feed": 3},
@@ -551,20 +629,22 @@ class TestMainDigestWiring:
         mock_get_eps.return_value = [{"title": "Ep1", "guid": "g1"}]
         mock_process.return_value = Path("/tmp/fake.md")
 
-        rip.main()
+        rip.main([])
 
+        mock_collect.assert_not_called()
         mock_digest.assert_not_called()
 
     @patch("transcript_search.build_index")
+    @patch("rip.collect_digest_episodes", return_value=[])
     @patch("rip.generate_digest")
     @patch("rip.process_episode")
     @patch("rip.get_new_episodes")
     @patch("rip.save_state")
     @patch("rip.load_state", return_value={})
     @patch("rip.load_config")
-    def test_skips_digest_when_no_episodes(self, mock_config, mock_load_state,
-                                            mock_save, mock_get_eps, mock_process,
-                                            mock_digest, mock_build):
+    def test_skips_digest_when_nothing_ripped_today(
+            self, mock_config, mock_load_state, mock_save, mock_get_eps,
+            mock_process, mock_digest, mock_collect, mock_build):
         mock_config.return_value = {
             "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
             "settings": {"max_episodes_per_feed": 3},
@@ -573,7 +653,7 @@ class TestMainDigestWiring:
         }
         mock_get_eps.return_value = []
 
-        rip.main()
+        rip.main([])
 
         mock_digest.assert_not_called()
 
@@ -595,7 +675,7 @@ class TestMainTranscriptIndexWiring:
         }
         mock_get_eps.return_value = [{"title": "Ep1", "guid": "g1"}]
         mock_process.return_value = Path("/tmp/fake.md")
-        rip.main()
+        rip.main([])
         mock_build.assert_called_once()
 
     @patch("transcript_search.build_index")
@@ -614,7 +694,7 @@ class TestMainTranscriptIndexWiring:
         }
         mock_get_eps.return_value = [{"title": "Ep1", "guid": "g1"}]
         mock_process.return_value = Path("/tmp/fake.md")
-        rip.main()
+        rip.main([])
         mock_build.assert_not_called()
 
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Podcast ripper: fetch → transcribe → summarize → markdown."""
 
+import argparse
 import json
 import logging
 import re
@@ -9,7 +10,7 @@ import subprocess
 import sys
 import time
 import urllib.request
-from datetime import date
+from datetime import date, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
@@ -283,12 +284,41 @@ def extract_sections(markdown_text, section_headings):
     return sections
 
 
-def generate_digest(processed_episodes, digest_config):
+def collect_digest_episodes(target_date):
+    """Episodes processed on `target_date` (a date), rebuilt from metrics.jsonl.
+
+    Keyed on the processing timestamp `ts` (converted to local time), NOT the
+    episode publish `date` field — the digest is "what got ripped today." Because
+    metrics is appended per-episode, this survives a run killed before it finishes
+    its feed sweep, and re-running it is idempotent. Deduped by path, latest wins.
+    """
+    if not METRICS_PATH.exists():
+        return []
+    by_path = {}
+    for line in METRICS_PATH.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+            processed = datetime.fromisoformat(rec["ts"]).astimezone().date()
+        except (json.JSONDecodeError, KeyError, ValueError):
+            continue
+        if processed != target_date:
+            continue
+        path = Path(rec.get("path", ""))
+        if not path.is_absolute():
+            path = BASE_DIR / path
+        by_path[str(path)] = (rec.get("podcast", ""), rec.get("episode_title", ""), path)
+    return list(by_path.values())
+
+
+def generate_digest(processed_episodes, digest_config, target_date=None):
     section_headings = digest_config.get("sections", ["Summary", "Key Points", "Action Items"])
     output_dir = TRANSCRIPTS_DIR / digest_config.get("output_dir", "digests")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    today = date.today().isoformat()
+    today = (target_date or date.today()).isoformat()
     output_path = output_dir / f"{today}.md"
 
     grouped = {}
@@ -439,22 +469,13 @@ def update_transcript_index(config):
         log.exception("Transcript index update failed")
 
 
-def main():
-    config = load_config()
-    feeds = config.get("feeds") or []
-    settings = config.get("settings", {})
-    settings["_summary_config"] = config.get("summary", {})
-    settings["_metrics_config"] = config.get("metrics", {})
+def process_feeds(feeds, settings, state):
+    """Check each feed and process new episodes. Returns count processed.
 
-    if not feeds:
-        log.warning("No feeds in config.yaml. Add some podcast RSS URLs and re-run.")
-        return
-
-    state = load_state()
-    TMP_DIR.mkdir(exist_ok=True)
-
+    State is saved per-episode so a run killed mid-sweep doesn't reprocess; the
+    digest is rebuilt separately from metrics.jsonl rather than from this loop.
+    """
     total_processed = 0
-    processed_episodes = []
     for feed_cfg in feeds:
         feed_name = feed_cfg["name"]
         feed_url = feed_cfg["url"]
@@ -479,13 +500,58 @@ def main():
                 state.setdefault(feed_url, []).append(ep["guid"])
                 save_state(state)
                 total_processed += 1
-                processed_episodes.append((feed_name, ep["title"], result))
             else:
                 log.error("Failed: %s", ep["title"])
+    return total_processed
 
-    digest_config = config.get("digest", {})
-    if processed_episodes and digest_config.get("enabled", False):
-        generate_digest(processed_episodes, digest_config)
+
+def rebuild_digest(config, target_date):
+    """Rebuild target_date's digest from metrics.jsonl. Idempotent. Returns episode count."""
+    episodes = collect_digest_episodes(target_date)
+    if episodes:
+        generate_digest(episodes, config.get("digest", {}), target_date=target_date)
+    return len(episodes)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Podcast ripper: fetch → transcribe → summarize → markdown.")
+    parser.add_argument(
+        "--digest", nargs="?", const="", metavar="YYYY-MM-DD",
+        help="Rebuild only the daily digest from metrics.jsonl (default: today) and exit. "
+             "Use to recover a digest a crashed/interrupted run never wrote.",
+    )
+    args = parser.parse_args(argv)
+
+    config = load_config()
+
+    if args.digest is not None:
+        target = date.fromisoformat(args.digest) if args.digest else date.today()
+        count = rebuild_digest(config, target)
+        log.info("Rebuilt digest for %s (%d episode(s)).", target, count)
+        return
+
+    feeds = config.get("feeds") or []
+    settings = config.get("settings", {})
+    settings["_summary_config"] = config.get("summary", {})
+    settings["_metrics_config"] = config.get("metrics", {})
+
+    if not feeds:
+        log.warning("No feeds in config.yaml. Add some podcast RSS URLs and re-run.")
+        return
+
+    state = load_state()
+    TMP_DIR.mkdir(exist_ok=True)
+
+    total_processed = process_feeds(feeds, settings, state)
+
+    # Build the digest from metrics (what was ripped today), not from this run's
+    # in-memory list, so a sweep that gets interrupted still produces today's
+    # digest on the next run — and a digest error never kills the rest of main().
+    if config.get("digest", {}).get("enabled", False):
+        try:
+            rebuild_digest(config, date.today())
+        except Exception:
+            log.exception("Digest generation failed")
 
     dashboard_config = config.get("dashboard", {})
     if dashboard_config.get("enabled", False):
