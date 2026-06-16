@@ -10,6 +10,9 @@ Usage:
     python transcript_search.py --index             # build/update the index
     python transcript_search.py "pricing strategy"  # query CLI
 """
+# Sibling search CLIs (search.py / transcript_search.py) share argparse main()
+# boilerplate; the duplication is incidental, not logic worth extracting.
+# pylint: disable=duplicate-code
 
 import argparse
 import logging
