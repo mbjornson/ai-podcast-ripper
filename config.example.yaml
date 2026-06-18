@@ -37,5 +37,8 @@ digest:
     - "Action Items"
   output_dir: "digests"
 
+notify:
+  enabled: false  # macOS desktop banner when a full run completes (true/1 to enable; macOS only)
+
 search:
   transcript_index: true  # build/update the SQLite FTS5 keyword index over raw/ each run
