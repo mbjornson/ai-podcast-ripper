@@ -513,6 +513,43 @@ def rebuild_digest(config, target_date):
     return len(episodes)
 
 
+def notify_enabled(value):
+    """True only for an explicit true/1 config value (bool, int, or string).
+
+    Stricter than plain truthiness on purpose: a quoted YAML ``"false"`` is a
+    non-empty string and would otherwise read as enabled. Bool is checked before
+    int because ``isinstance(True, int)`` is True in Python.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value == 1
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes")
+    return False
+
+
+def notify_complete(message):
+    """Best-effort macOS desktop banner signalling the run finished.
+
+    Lets the launchd job announce its own completion without depending on any
+    watching process. Never raises: a banner failure (headless session, missing
+    osascript, non-macOS host) must not affect the run's outcome — so it is a
+    no-op off darwin and swallows everything else, like the digest/dashboard steps.
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        script = f'display notification {json.dumps(message, ensure_ascii=False)} with title "podcast-ripper"'
+        subprocess.run(
+            ["osascript", "-e", script],
+            check=False, timeout=10,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        log.warning("Completion notification failed", exc_info=True)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Podcast ripper: fetch → transcribe → summarize → markdown.")
     parser.add_argument(
@@ -547,9 +584,10 @@ def main(argv=None):
     # Build the digest from metrics (what was ripped today), not from this run's
     # in-memory list, so a sweep that gets interrupted still produces today's
     # digest on the next run — and a digest error never kills the rest of main().
+    digest_count = None
     if config.get("digest", {}).get("enabled", False):
         try:
-            rebuild_digest(config, date.today())
+            digest_count = rebuild_digest(config, date.today())
         except Exception:
             log.exception("Digest generation failed")
 
@@ -565,6 +603,12 @@ def main(argv=None):
     update_transcript_index(config)
 
     log.info("Done. Processed %d episode(s).", total_processed)
+
+    if notify_enabled(config.get("notify", {}).get("enabled", False)):
+        summary = f"{total_processed} new episode(s)"
+        if digest_count is not None:
+            summary += f"; digest: {digest_count}"
+        notify_complete(f"Run complete - {summary}")
 
 
 if __name__ == "__main__":

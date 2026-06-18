@@ -709,3 +709,107 @@ class TestSaveLoadState:
     def test_load_missing_returns_empty(self, tmp_path, monkeypatch):
         monkeypatch.setattr(rip, "STATE_PATH", tmp_path / "missing.json")
         assert rip.load_state() == {}
+
+
+class TestNotifyEnabled:
+    def test_true_values(self):
+        for v in (True, 1, "1", "true", "TRUE", " yes ", "Yes"):
+            assert rip.notify_enabled(v) is True, v
+
+    def test_false_values(self):
+        for v in (False, 0, None, "", "false", "no", "0", 2, "off", []):
+            assert rip.notify_enabled(v) is False, v
+
+
+class TestNotifyComplete:
+    def test_noop_off_darwin(self, monkeypatch):
+        monkeypatch.setattr(rip.sys, "platform", "linux")
+        with patch("rip.subprocess.run") as mock_run:
+            rip.notify_complete("hello")
+        mock_run.assert_not_called()
+
+    def test_invokes_osascript_on_darwin(self, monkeypatch):
+        monkeypatch.setattr(rip.sys, "platform", "darwin")
+        with patch("rip.subprocess.run") as mock_run:
+            rip.notify_complete("Run complete - 5 new")
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        cmd = args[0]
+        assert cmd[0] == "osascript"
+        assert cmd[1] == "-e"
+        assert "display notification" in cmd[2]
+        assert "Run complete - 5 new" in cmd[2]
+        assert 'with title "podcast-ripper"' in cmd[2]
+        assert kwargs.get("timeout") == 10
+
+    def test_swallows_subprocess_errors(self, monkeypatch):
+        monkeypatch.setattr(rip.sys, "platform", "darwin")
+        with patch("rip.subprocess.run", side_effect=OSError("boom")):
+            rip.notify_complete("x")  # must not raise
+
+
+class TestMainNotifyWiring:
+    @patch("rip.notify_complete")
+    @patch("transcript_search.build_index")
+    @patch("rip.process_episode")
+    @patch("rip.get_new_episodes")
+    @patch("rip.save_state")
+    @patch("rip.load_state", return_value={})
+    @patch("rip.load_config")
+    def test_notifies_when_enabled(self, mock_config, mock_load_state, mock_save,
+                                   mock_get_eps, mock_process, mock_build, mock_notify):
+        mock_config.return_value = {
+            "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
+            "settings": {"max_episodes_per_feed": 3},
+            "summary": {},
+            "notify": {"enabled": True},
+        }
+        mock_get_eps.return_value = [{"title": "Ep1", "guid": "g1"}]
+        mock_process.return_value = Path("/tmp/fake.md")
+
+        rip.main([])
+
+        mock_notify.assert_called_once()
+
+    @patch("rip.notify_complete")
+    @patch("transcript_search.build_index")
+    @patch("rip.process_episode")
+    @patch("rip.get_new_episodes")
+    @patch("rip.save_state")
+    @patch("rip.load_state", return_value={})
+    @patch("rip.load_config")
+    def test_silent_when_notify_absent(self, mock_config, mock_load_state, mock_save,
+                                       mock_get_eps, mock_process, mock_build, mock_notify):
+        mock_config.return_value = {
+            "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
+            "settings": {"max_episodes_per_feed": 3},
+            "summary": {},
+        }
+        mock_get_eps.return_value = [{"title": "Ep1", "guid": "g1"}]
+        mock_process.return_value = Path("/tmp/fake.md")
+
+        rip.main([])
+
+        mock_notify.assert_not_called()
+
+    @patch("rip.notify_complete")
+    @patch("transcript_search.build_index")
+    @patch("rip.process_episode")
+    @patch("rip.get_new_episodes")
+    @patch("rip.save_state")
+    @patch("rip.load_state", return_value={})
+    @patch("rip.load_config")
+    def test_silent_when_notify_string_false(self, mock_config, mock_load_state, mock_save,
+                                             mock_get_eps, mock_process, mock_build, mock_notify):
+        mock_config.return_value = {
+            "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
+            "settings": {"max_episodes_per_feed": 3},
+            "summary": {},
+            "notify": {"enabled": "false"},  # quoted YAML string must NOT enable
+        }
+        mock_get_eps.return_value = [{"title": "Ep1", "guid": "g1"}]
+        mock_process.return_value = Path("/tmp/fake.md")
+
+        rip.main([])
+
+        mock_notify.assert_not_called()
