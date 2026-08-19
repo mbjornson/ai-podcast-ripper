@@ -118,12 +118,21 @@ class TestBuildPrompt:
         prompt = rip.build_prompt({}, "Pod", "Ep", "text")
         assert "You are analyzing" in prompt
 
-    def test_transcript_truncated(self):
-        long_transcript = "x" * 20000
-        prompt = rip.build_prompt({}, "Pod", "Ep", long_transcript)
-        assert len(long_transcript[:12000]) == 12000
-        assert "x" * 12000 in prompt
-        assert "x" * 12001 not in prompt
+    def test_transcript_budget_is_configurable(self):
+        prompt = rip.build_prompt({}, "Pod", "Ep", "x" * 20000, max_chars=500)
+        assert "x" * 500 in prompt
+        assert "x" * 501 not in prompt
+
+    def test_transcript_under_budget_passes_through_whole(self):
+        # 47k is the median transcript; the old 12000 literal cut it to a quarter.
+        transcript = "y" * 47000
+        prompt = rip.build_prompt({}, "Pod", "Ep", transcript)
+        assert transcript in prompt
+
+    def test_transcript_budget_zero_means_unlimited(self):
+        transcript = "z" * 300000
+        prompt = rip.build_prompt({}, "Pod", "Ep", transcript, max_chars=0)
+        assert transcript in prompt
 
 
 class TestGetNewEpisodes:
@@ -813,3 +822,92 @@ class TestMainNotifyWiring:
         rip.main([])
 
         mock_notify.assert_not_called()
+
+
+class TestSummarizeWiring:
+    def _call(self, transcript, **kwargs):
+        captured = {}
+
+        def fake_generate(model, prompt, **kw):
+            captured["prompt"] = prompt
+            captured.update(kw)
+            return "summary text"
+
+        with patch("rip.metrics_mod.ollama_generate", fake_generate):
+            rip.summarize(transcript, "Ep", "Pod", "somemodel", {}, **kwargs)
+        return captured
+
+    def test_sizes_num_ctx_to_the_prompt(self):
+        small = self._call("a" * 1000)
+        large = self._call("a" * 200000)
+        assert large["num_ctx"] > small["num_ctx"]
+
+    def test_passes_full_transcript_when_under_budget(self):
+        transcript = "b" * 47000
+        assert transcript in self._call(transcript)["prompt"]
+
+    def test_honours_transcript_budget(self):
+        captured = self._call("c" * 50000, max_chars=1000)
+        assert "c" * 1000 in captured["prompt"]
+        assert "c" * 1001 not in captured["prompt"]
+
+    def test_clamps_num_ctx_to_configured_ceiling(self):
+        captured = self._call("d" * 2_000_000, max_chars=0, max_context=32768)
+        assert captured["num_ctx"] == 32768
+
+
+class TestSummaryNumPredict:
+    def _call(self, **kwargs):
+        captured = {}
+
+        def fake_generate(model, prompt, **kw):
+            captured.update(kw)
+            return "summary"
+
+        with patch("rip.metrics_mod.ollama_generate", fake_generate):
+            rip.summarize("transcript", "Ep", "Pod", "m", {}, **kwargs)
+        return captured
+
+    def test_defaults_to_4096(self):
+        # qwen-class reasoning models share this budget with their thinking
+        # tokens; 2048 starved the summary and dropped whole sections.
+        assert self._call()["num_predict"] == 4096
+
+    def test_honours_configured_value(self):
+        assert self._call(num_predict=1234)["num_predict"] == 1234
+
+    def test_num_ctx_reserves_room_for_the_larger_output(self):
+        small = self._call(num_predict=1024)["num_ctx"]
+        large = self._call(num_predict=16384)["num_ctx"]
+        assert large > small
+
+
+class TestProcessEpisodeReadsNumPredict:
+    def test_passes_settings_value_to_summarize(self):
+        settings = {
+            "ollama_model": "m", "whisper_model": "w",
+            "summary_num_predict": 777, "_summary_config": {},
+        }
+        assert self._run(settings)["num_predict"] == 777
+
+    def test_falls_back_to_default_when_unset(self):
+        settings = {"ollama_model": "m", "whisper_model": "w", "_summary_config": {}}
+        captured = self._run(settings)
+        assert captured["num_predict"] == rip.metrics_mod.DEFAULT_NUM_PREDICT
+        assert captured["max_chars"] == rip.metrics_mod.DEFAULT_TRANSCRIPT_CHARS
+
+    @staticmethod
+    def _run(settings):
+        captured = {}
+
+        def fake_summarize(*args, **kwargs):
+            captured.update(kwargs)
+            return "summary"
+
+        ep = {"title": "T", "audio_url": "http://x/a.mp3", "published": "",
+              "transcript_url": "http://x/t.txt", "transcript_type": "text/plain"}
+        with patch("rip.summarize", fake_summarize), \
+             patch("rip.fetch_transcript", lambda *a, **k: "some transcript"), \
+             patch("rip.write_markdown"), patch("rip.record_episode_metrics"):
+            rip.process_episode(ep, "Feed", settings)
+        return captured

@@ -8,6 +8,13 @@ settings:
   whisper_model: "medium"
   ollama_model: "gemma3"
   max_episodes_per_feed: 3
+  # Transcript chars fed to the summarizer. 0 disables the cap.
+  max_transcript_chars: 240000
+  # Ceiling for the per-episode num_ctx sizing.
+  max_context_tokens: 131072
+  # Output token budget. Reasoning models (qwen3.8) spend this on thinking
+  # before writing; 2048 truncated summaries and dropped sections.
+  summary_num_predict: 4096
   backfill_episodes: 3
   keep_audio: false
 

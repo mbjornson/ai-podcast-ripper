@@ -1,5 +1,8 @@
 """Tests for metrics.py"""
 
+import json
+from unittest.mock import patch
+
 import metrics
 
 
@@ -259,3 +262,53 @@ class TestLoadExistingMetrics:
         jsonl.write_text('{"path":"a","content_hash":"h"}\nnot json\n{"path":"b","content_hash":"h2"}\n')
         loaded = metrics.load_existing_metrics(jsonl)
         assert len(loaded) == 2
+
+
+class TestContextWindowFor:
+    def test_scales_with_prompt_length(self):
+        small = metrics.context_window_for("a" * 1000, num_predict=2048)
+        large = metrics.context_window_for("a" * 200000, num_predict=2048)
+        assert large > small
+
+    def test_clamps_to_ceiling(self):
+        assert metrics.context_window_for("a" * 5_000_000, num_predict=2048,
+                                          ceiling=131072) == 131072
+
+    def test_has_floor_for_tiny_prompts(self):
+        assert metrics.context_window_for("hi", num_predict=2048) >= 8192
+
+    def test_reserves_room_for_output(self):
+        prompt = "a" * 120000  # ~40k tokens at 3 chars/token
+        assert metrics.context_window_for(prompt, num_predict=2048) > 40000
+
+
+class TestOllamaGenerateNumCtx:
+    def _capture(self, **kwargs):
+        captured = {}
+
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            @staticmethod
+            def read():
+                return json.dumps({"response": "ok"}).encode()
+
+        def fake_urlopen(req, timeout=None):
+            captured.update(json.loads(req.data))
+            return FakeResp()
+
+        with patch("metrics.urllib.request.urlopen", fake_urlopen):
+            metrics.ollama_generate("m", "prompt", **kwargs)
+        return captured
+
+    def test_sends_num_ctx_when_given(self):
+        body = self._capture(num_ctx=32768)
+        assert body["options"]["num_ctx"] == 32768
+
+    def test_omits_num_ctx_when_not_given(self):
+        body = self._capture()
+        assert "num_ctx" not in body["options"]
