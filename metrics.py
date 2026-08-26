@@ -5,6 +5,7 @@ import datetime as _dt
 import hashlib
 import json
 import logging
+import math
 import re
 import urllib.request
 from pathlib import Path
@@ -216,7 +217,33 @@ def judge_episode(parsed, model, timeout=120):
     return parse_judge_response(raw) if raw else None
 
 
-def build_summary_prompt(summary_config, podcast_name, episode_title, transcript):
+# Transcript budget. The old hardcoded 12000 fed the model ~21% of the corpus;
+# 91% of episodes were cut. 0 (or None) disables the cap entirely.
+DEFAULT_TRANSCRIPT_CHARS = 240000
+
+# Context sizing. Ollama allocates KV cache to num_ctx, so a static ceiling would
+# reserve the same memory for a 3-minute episode as a 3-hour one. Size per call.
+CHARS_PER_TOKEN = 3.0      # conservative: under-estimating this over-estimates tokens
+CONTEXT_STEP = 8192        # round up in steps so near-identical prompts reuse a load
+MIN_CONTEXT = 8192
+DEFAULT_MAX_CONTEXT = 131072
+
+# Output budget. Reasoning models (qwen3.8) spend this on thinking tokens
+# before writing anything: at 2048 they truncated mid-summary and dropped
+# whole sections. Non-reasoning models never reach the ceiling either way.
+DEFAULT_NUM_PREDICT = 4096
+
+
+def context_window_for(prompt, num_predict, ceiling=DEFAULT_MAX_CONTEXT,
+                       minimum=MIN_CONTEXT):
+    """num_ctx big enough for prompt + generated output, stepped and clamped."""
+    tokens = (len(prompt) / CHARS_PER_TOKEN + num_predict) * 1.1  # 10% headroom
+    stepped = math.ceil(tokens / CONTEXT_STEP) * CONTEXT_STEP
+    return max(minimum, min(stepped, ceiling))
+
+
+def build_summary_prompt(summary_config, podcast_name, episode_title, transcript,
+                         max_chars=DEFAULT_TRANSCRIPT_CHARS):
     """Construct the user-facing LLM summarization prompt."""
     interests = summary_config.get("listener_interests", "")
     sections = summary_config.get("sections", [])
@@ -244,12 +271,12 @@ def build_summary_prompt(summary_config, podcast_name, episode_title, transcript
         f"{chr(10).join(section_lines)}\n\n"
         f"Focus on actionable signal over generic advice. Skip pleasantries and filler. "
         f"If the episode is mostly entertainment with low signal, say so.\n\n"
-        f"Transcript:\n{transcript[:12000]}"
+        f"Transcript:\n{transcript[:max_chars] if max_chars else transcript}"
     )
 
 
 def ollama_generate(model, prompt, num_predict=2048, temperature=0.3,
-                    response_format=None, timeout=300):
+                    response_format=None, timeout=300, num_ctx=None):
     """POST to Ollama /api/generate. Returns response text, or None on failure."""
     body = {
         "model": model,
@@ -257,6 +284,8 @@ def ollama_generate(model, prompt, num_predict=2048, temperature=0.3,
         "stream": False,
         "options": {"num_predict": num_predict, "temperature": temperature},
     }
+    if num_ctx:
+        body["options"]["num_ctx"] = num_ctx
     if response_format:
         body["format"] = response_format
     req = urllib.request.Request(

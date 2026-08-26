@@ -54,9 +54,15 @@ def load_config():
         return yaml.safe_load(f)
 
 
-def summarize(transcript, episode_title, podcast_name, model, summary_config):
-    prompt = metrics_mod.build_summary_prompt(summary_config, podcast_name, episode_title, transcript)
-    return metrics_mod.ollama_generate(model, prompt, num_predict=2048, temperature=0.3)
+def summarize(transcript, episode_title, podcast_name, model, summary_config,
+              max_chars=metrics_mod.DEFAULT_TRANSCRIPT_CHARS,
+              max_context=metrics_mod.DEFAULT_MAX_CONTEXT,
+              num_predict=metrics_mod.DEFAULT_NUM_PREDICT):
+    prompt = metrics_mod.build_summary_prompt(summary_config, podcast_name, episode_title,
+                                              transcript, max_chars=max_chars)
+    num_ctx = metrics_mod.context_window_for(prompt, num_predict, ceiling=max_context)
+    return metrics_mod.ollama_generate(model, prompt, num_predict=num_predict,
+                                       temperature=0.3, num_ctx=num_ctx)
 
 
 def patch_file(path, summary):
@@ -74,8 +80,12 @@ def patch_file(path, summary):
 
 def main():
     config = load_config()
-    model = config["settings"]["ollama_model"]
+    settings = config["settings"]
+    model = settings["ollama_model"]
     summary_config = config.get("summary", {})
+    max_chars = settings.get("max_transcript_chars", metrics_mod.DEFAULT_TRANSCRIPT_CHARS)
+    max_context = settings.get("max_context_tokens", metrics_mod.DEFAULT_MAX_CONTEXT)
+    num_predict = settings.get("summary_num_predict", metrics_mod.DEFAULT_NUM_PREDICT)
 
     total = len(MISSING)
     for i, rel in enumerate(MISSING, 1):
@@ -95,7 +105,9 @@ def main():
             continue
 
         print(f"[{i}/{total}] Summarizing: {path.name}", flush=True)
-        summary = summarize(transcript, episode_title, podcast_name, model, summary_config)
+        summary = summarize(transcript, episode_title, podcast_name, model,
+                            summary_config, max_chars=max_chars,
+                            max_context=max_context, num_predict=num_predict)
         if not summary:
             print("  FAILED")
             continue

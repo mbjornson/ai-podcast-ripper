@@ -238,10 +238,17 @@ def transcribe(audio_path, model_name):
 build_prompt = metrics_mod.build_summary_prompt
 
 
-def summarize(transcript, episode_title, podcast_name, model, summary_config):
+def summarize(transcript, episode_title, podcast_name, model, summary_config,
+              max_chars=metrics_mod.DEFAULT_TRANSCRIPT_CHARS,
+              max_context=metrics_mod.DEFAULT_MAX_CONTEXT,
+              num_predict=metrics_mod.DEFAULT_NUM_PREDICT):
     log.info("Summarizing with %s...", model)
-    prompt = build_prompt(summary_config, podcast_name, episode_title, transcript)
-    return metrics_mod.ollama_generate(model, prompt, num_predict=2048, temperature=0.3)
+    prompt = build_prompt(summary_config, podcast_name, episode_title, transcript,
+                          max_chars=max_chars)
+    num_ctx = metrics_mod.context_window_for(prompt, num_predict, ceiling=max_context)
+    log.info("Prompt %d chars -> num_ctx %d", len(prompt), num_ctx)
+    return metrics_mod.ollama_generate(model, prompt, num_predict=num_predict,
+                                       temperature=0.3, num_ctx=num_ctx)
 
 
 def parse_episode_date(published):
@@ -432,6 +439,12 @@ def process_episode(episode, feed_name, settings):
         summary = summarize(
             transcript, episode["title"], feed_name,
             settings["ollama_model"], settings.get("_summary_config", {}),
+            max_chars=settings.get("max_transcript_chars",
+                                   metrics_mod.DEFAULT_TRANSCRIPT_CHARS),
+            max_context=settings.get("max_context_tokens",
+                                     metrics_mod.DEFAULT_MAX_CONTEXT),
+            num_predict=settings.get("summary_num_predict",
+                                     metrics_mod.DEFAULT_NUM_PREDICT),
         )
         summarized_seconds = round(time.monotonic() - t0, 1)
 
