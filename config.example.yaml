@@ -6,7 +6,11 @@ feeds:
 
 settings:
   whisper_model: "medium"
-  ollama_model: "gemma3"
+  llm_provider: "omlx"
+  ollama_model: "gemma3" # Used when llm_provider is "ollama"
+  omlx_model: "gemma-4-12b-coder-fable5-composer2.5-4bit"
+  omlx_base_url: "http://127.0.0.1:10000/v1"
+  omlx_api_key: "" # Set to the key configured in oMLX, if required
   max_episodes_per_feed: 3
   # Transcript chars fed to the summarizer. 0 disables the cap.
   max_transcript_chars: 240000

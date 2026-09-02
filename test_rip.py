@@ -855,6 +855,20 @@ class TestSummarizeWiring:
         captured = self._call("d" * 2_000_000, max_chars=0, max_context=32768)
         assert captured["num_ctx"] == 32768
 
+    def test_uses_configured_omlx_provider(self):
+        captured = {}
+
+        def fake_generate(model, prompt, **kw):
+            captured.update(kw)
+            return "summary text"
+
+        with patch("rip.metrics_mod.omlx_generate", fake_generate):
+            rip.summarize("transcript", "Ep", "Pod", "gemma", {},
+                          provider="omlx", base_url="http://omlx/v1",
+                          api_key="secret")
+        assert captured["base_url"] == "http://omlx/v1"
+        assert captured["api_key"] == "secret"
+
 
 class TestSummaryNumPredict:
     def _call(self, **kwargs):

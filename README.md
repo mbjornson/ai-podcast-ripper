@@ -1,6 +1,6 @@
 # Podcast Ripper
 
-Local podcast transcription and summarization pipeline. Fetches new episodes from RSS feeds, transcribes with Faster Whisper, summarizes with a local LLM via Ollama, and outputs structured markdown.
+Local podcast transcription and summarization pipeline. Fetches new episodes from RSS feeds, transcribes with Faster Whisper, summarizes with a local LLM via oMLX or Ollama, and outputs structured markdown.
 
 Everything runs locally — no external APIs.
 
@@ -9,7 +9,7 @@ Everything runs locally — no external APIs.
 - macOS (Apple Silicon recommended)
 - [Homebrew](https://brew.sh)
 - Python 3.10+
-- [Ollama](https://ollama.com)
+- [oMLX](https://github.com/jundot/omlx) (default) or [Ollama](https://ollama.com)
 
 ## Setup
 
@@ -19,7 +19,7 @@ Everything runs locally — no external APIs.
 ./install.sh
 ```
 
-Installs dependencies, creates `config.yaml`, pulls the summarization model,
+Installs dependencies, creates `config.yaml`, and prepares the summarization model,
 and optionally schedules a daily run (asking what time, and offering a matching
 system wake so a sleeping Mac still runs on time). Safe to re-run. The manual
 steps below are the equivalent done by hand.
@@ -36,13 +36,20 @@ which downloads its model automatically on the first run (the `large-v3-turbo`
 default is ~1.6 GB). Set `whisper_model` in `config.yaml` to a smaller model
 such as `medium` for faster but less accurate transcription.
 
-### 2. Pull the summarization model
+### 2. Prepare the summarization model
+
+The default configuration uses the oMLX model
+`gemma-4-12b-coder-fable5-composer2.5-4bit`. Start oMLX and ensure that model
+is installed. To use Ollama instead, set `llm_provider: "ollama"` and pull the
+configured Ollama model:
 
 ```bash
 ollama pull gemma3
 ```
 
-Make sure Ollama is running (`ollama serve` or the Ollama desktop app).
+For the default provider, make sure oMLX is running and the configured model is
+available. If using Ollama, make sure Ollama is running (`ollama serve` or the
+Ollama desktop app).
 
 ### 3. Add your podcasts
 
@@ -130,7 +137,11 @@ All settings live in `config.yaml`:
 | Setting | Default | Description |
 |---|---|---|
 | `whisper_model` | `medium` | Whisper model size (`base`, `medium`, `large-v3`) |
-| `ollama_model` | `gemma3` | Ollama model for summarization |
+| `llm_provider` | `omlx` | Text model provider (`omlx` or `ollama`) |
+| `omlx_model` | Gemma 4 12B | oMLX model for summarization and judging |
+| `omlx_base_url` | `http://127.0.0.1:10000/v1` | oMLX OpenAI-compatible API base URL |
+| `omlx_api_key` | — | Optional oMLX API key |
+| `ollama_model` | `gemma3` | Ollama fallback model |
 | `max_episodes_per_feed` | `3` | Max new episodes to process per feed per run |
 | `backfill_episodes` | `3` | Older episodes to grab when no new ones exist |
 | `keep_audio` | `false` | Keep downloaded audio files after transcription |
