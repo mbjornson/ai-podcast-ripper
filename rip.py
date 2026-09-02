@@ -398,10 +398,7 @@ def record_episode_metrics(output_path, feed_name, podcast_slug, settings,
 
     judge_result = None
     if metrics_cfg.get("judge_enabled", False) and parsed["sections"].get("Summary"):
-        default_model_key = (
-            "omlx_model" if settings.get("llm_provider") == "omlx" else "ollama_model"
-        )
-        judge_model = metrics_cfg.get("judge_model") or settings[default_model_key]
+        judge_model = metrics_cfg.get("judge_model") or metrics_mod.configured_model(settings)
         judge_result = metrics_mod.judge_episode(
             parsed, judge_model,
             provider=settings.get("llm_provider", "ollama"),
@@ -450,7 +447,7 @@ def process_episode(episode, feed_name, settings):
         t0 = time.monotonic()
         summary = summarize(
             transcript, episode["title"], feed_name,
-            settings.get("omlx_model", settings["ollama_model"]),
+            metrics_mod.configured_model(settings),
             settings.get("_summary_config", {}),
             max_chars=settings.get("max_transcript_chars",
                                    metrics_mod.DEFAULT_TRANSCRIPT_CHARS),

@@ -3,6 +3,7 @@
 import json
 from unittest.mock import patch
 
+import pytest
 import metrics
 
 
@@ -364,3 +365,21 @@ class TestOmlxGenerate:
     def test_returns_empty_string_for_missing_choices(self):
         result, _captured = self._capture(response={"choices": []})
         assert result == ""
+
+
+class TestConfiguredModel:
+    def test_selects_model_for_omlx_provider_without_ollama_key(self):
+        assert metrics.configured_model({
+            "llm_provider": "omlx",
+            "omlx_model": "gemma",
+        }) == "gemma"
+
+    def test_selects_model_for_ollama_provider_without_omlx_key(self):
+        assert metrics.configured_model({
+            "llm_provider": "ollama",
+            "ollama_model": "gemma3",
+        }) == "gemma3"
+
+    def test_rejects_missing_model_for_selected_provider(self):
+        with pytest.raises(ValueError, match="omlx_model"):
+            metrics.configured_model({"llm_provider": "omlx"})

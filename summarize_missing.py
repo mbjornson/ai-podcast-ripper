@@ -86,7 +86,7 @@ def main():
     config = load_config()
     settings = config["settings"]
     provider = settings.get("llm_provider", "ollama")
-    model = settings.get("omlx_model", settings["ollama_model"])
+    model = metrics_mod.configured_model(settings)
     base_url = settings.get("omlx_base_url", metrics_mod.OMLX_BASE_URL)
     api_key = settings.get("omlx_api_key")
     summary_config = config.get("summary", {})

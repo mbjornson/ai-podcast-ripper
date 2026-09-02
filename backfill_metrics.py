@@ -57,6 +57,18 @@ def build_row(path, parsed, judge_result):
     )
 
 
+def judge_config(config):
+    """Resolve the configured provider, model, and connection settings."""
+    settings = config["settings"]
+    metrics_cfg = config.get("metrics", {})
+    return (
+        metrics_cfg.get("judge_model") or metrics.configured_model(settings),
+        settings.get("llm_provider", "ollama"),
+        settings.get("omlx_base_url", metrics.OMLX_BASE_URL),
+        settings.get("omlx_api_key"),
+    )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-judge", action="store_true", help="Skip LLM judging (fast pass)")
@@ -66,8 +78,7 @@ def main():
     args = parser.parse_args()
 
     config = load_config()
-    metrics_cfg = config.get("metrics", {})
-    judge_model = metrics_cfg.get("judge_model", config["settings"]["ollama_model"])
+    judge_model, provider, base_url, api_key = judge_config(config)
 
     existing = metrics.load_existing_metrics(METRICS_PATH)
     log.info("Loaded %d existing metric rows", len(existing))
@@ -108,7 +119,10 @@ def main():
                 log.info("[%d/%d] Skip judge (no summary): %s", i, total, path.name)
             else:
                 log.info("[%d/%d] Judging: %s", i, total, path.name)
-                judge_result = metrics.judge_episode(parsed, judge_model)
+                judge_result = metrics.judge_episode(
+                    parsed, judge_model, provider=provider, base_url=base_url,
+                    api_key=api_key,
+                )
                 if judge_result:
                     judged += 1
 

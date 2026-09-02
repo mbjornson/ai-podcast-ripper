@@ -19,6 +19,16 @@ BASE_DIR = Path(__file__).parent
 
 log = logging.getLogger("metrics")
 
+
+def configured_model(settings):
+    """Return the model configured for the selected local provider."""
+    provider = settings.get("llm_provider", "ollama")
+    model_key = "omlx_model" if provider == "omlx" else "ollama_model"
+    model = settings.get(model_key)
+    if not model:
+        raise ValueError(f"Missing required setting: {model_key}")
+    return model
+
 LOW_SIGNAL_RE = re.compile(
     r"low signal|mostly entertainment|no clear action|limited actionable",
     re.IGNORECASE,

@@ -869,6 +869,26 @@ class TestSummarizeWiring:
         assert captured["base_url"] == "http://omlx/v1"
         assert captured["api_key"] == "secret"
 
+    def test_process_episode_supports_omlx_only_settings(self):
+        captured = {}
+
+        def fake_summarize(*args, **kwargs):
+            captured["model"] = args[3]
+            captured.update(kwargs)
+            return "summary"
+
+        settings = {
+            "llm_provider": "omlx", "omlx_model": "gemma", "whisper_model": "w",
+            "_summary_config": {},
+        }
+        ep = {"title": "T", "audio_url": "http://x/a.mp3", "published": "",
+              "transcript_url": "http://x/t.txt", "transcript_type": "text/plain"}
+        with patch("rip.summarize", fake_summarize), \
+             patch("rip.fetch_transcript", lambda *a, **k: "some transcript"), \
+             patch("rip.write_markdown"), patch("rip.record_episode_metrics"):
+            rip.process_episode(ep, "Feed", settings)
+        assert captured["model"] == "gemma"
+
 
 class TestSummaryNumPredict:
     def _call(self, **kwargs):
