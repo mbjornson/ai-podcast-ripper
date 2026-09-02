@@ -1,0 +1,225 @@
+{
+  "main": {
+    "id": "1a005491d170380f",
+    "type": "split",
+    "children": [
+      {
+        "id": "4a5dbd0971ff1a41",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "47d79374fa72256c",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "cost-of-glory/2026-06-04--121-plutarch-and-shakespeare-w-the-base-creates.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "2026-06-04--121-plutarch-and-shakespeare-w-the-base-creates"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "9e136b9ffd037bf2",
+    "type": "split",
+    "children": [
+      {
+        "id": "0df8804b085a8bfd",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "2a4e410998c8cc80",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabeticalReverse",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "835e72cc060b497f",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "e3b7a8060c98f07a",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 714.5
+  },
+  "right": {
+    "id": "55b242767ccde70d",
+    "type": "split",
+    "children": [
+      {
+        "id": "f790c4eef5b94a21",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "ba42c06271f891dd",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "digests/2026-05-20.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks for 2026-05-20"
+            }
+          },
+          {
+            "id": "be4f97b59d055d58",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "digests/2026-05-20.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links from 2026-05-20"
+            }
+          },
+          {
+            "id": "85a96f033d88fed9",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "35439487df43cd90",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          },
+          {
+            "id": "cb24ec5685f08e54",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "digests/2026-05-20.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline of 2026-05-20"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false
+    }
+  },
+  "active": "47d79374fa72256c",
+  "lastOpenFiles": [
+    "all-in/2026-03-03--ray-dalio-our-system-is-in-jeopardy-debt-ai-the-cycle-that-destroyed-rome.md",
+    "all-in/2026-06-12--all-ins-best-ideas-pitch-competition-4-investors-present-their-top-trades-live.md",
+    "all-in/2026-06-13--anthropics-fable-backlash-nationalizing-ai-inflation-heats-up-californias-broken.md",
+    "the-innovation-show/2025-09-30--expected-value-xv-revolutionizing-innovation-metrics-with-simon-hill.md",
+    "the-innovation-show/2025-10-08--the-power-of-productive-failure-with-manu-kapur-part-3-finale.md",
+    "the-innovation-show/2025-10-14--the-great-reshuffle-why-adobe-couldnt-beat-figma-howard-yu-sangeet-paul-choudary.md",
+    "johnathan-bi/2025-02-17--how-to-prepare-for-the-ai-age-us-china-war-job-loss-tyler-cowen.md",
+    "johnathan-bi/2025-03-11--the-first-80-years-of-ai-and-what-comes-next-oxfords-michael-wooldridge.md",
+    "johnathan-bi/2025-03-21--why-plato-hated-democracy-grf-ferrari-on-the-republic.md",
+    "owned-and-operated/2026-01-22--what-home-service-business-should-you-start-in-2026-and-how-to-win-early.md",
+    "owned-and-operated/2026-01-27--how-to-budget-marketing-in-2026-without-wasting-cash.md",
+    "owned-and-operated/2026-01-29--building-scaling-and-selling-home-service-businesses-supercut.md",
+    "inspired-or-acquired/2024-06-11--eversite-with-joe-rob-benson-a-business-model-buyers-love.md",
+    "inspired-or-acquired/2024-06-20--all-alaska-outdoors-how-do-you-value-this-incredible-fishing-lodge-and-real-esta.md",
+    "inspired-or-acquired/2024-06-27--alan-pentz-a-clear-vision-for-a-big-exit.md",
+    "huberman-lab/2025-12-22--transform-pain-trauma-into-creative-expression-david-choe.md",
+    "huberman-lab/2025-12-25--essentials-how-to-optimize-your-hormones-for-health-vitality-dr-kyle-gillett.md",
+    "huberman-lab/2026-06-15--the-mental-frame-specific-daily-actions-to-succeed-andy-stumpf.md",
+    "how-to-take-over-the-world/2024-08-06--nike-founder-phil-knight.md",
+    "how-to-take-over-the-world/2024-08-30--the-greatest-coach-of-all-time-john-wooden.md",
+    "how-to-take-over-the-world/2024-09-25--jesus.md",
+    "dive-club/2025-07-02--julian-lehr-how-storytelling-works-at-linear.md",
+    "dive-club/2025-07-11--ryo-lu-designing-the-future-of-cursor.md",
+    "dive-club/2025-07-18--gunnar-gray-designing-perplexity-shaders-and-voice-interfaces.md",
+    "derek-sivers/2025-12-15--no-picture-is-the-whole-picture.md",
+    "derek-sivers/2025-12-16--people-share-perspectives-not-facts.md",
+    "digests/entities.html",
+    "digests/dashboard/the-sweaty-startup.html",
+    "digests/dashboard/the-side-hustle-show.html",
+    "digests/dashboard/the-knowledge-project.html",
+    "digests/dashboard/the-innovation-show.html",
+    "digests/dashboard/the-david-rutherford-show.html",
+    "digests/dashboard/product-thinking.html",
+    "digests/dashboard/owned-and-operated.html",
+    "digests/dashboard/nate-jones-ai-news-strategy-daily.html",
+    "digests/dashboard/modern-wisdom.html"
+  ]
+}
