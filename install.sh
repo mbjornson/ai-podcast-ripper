@@ -2,7 +2,7 @@
 #
 # Podcast Ripper installer (macOS).
 #
-# Installs dependencies, sets up config, pulls the summarization model, and
+# Installs dependencies, sets up config, prepares the summarization model, and
 # (optionally) schedules a daily automatic run via launchd — asking what time
 # you want it to run and offering a matching system wake so a sleeping Mac
 # still runs on time.
@@ -58,10 +58,18 @@ read_setting() {  # read_setting <key> <fallback>
 }
 
 # --- 4. Models -------------------------------------------------------------
+LLM_PROVIDER="$(read_setting llm_provider omlx)"
+OMLX_MODEL="$(read_setting omlx_model gemma-4-12b-coder-fable5-composer2.5-4bit)"
 OLLAMA_MODEL="$(read_setting ollama_model gemma3)"
 WHISPER_MODEL="$(read_setting whisper_model large-v3-turbo)"
 
-if command -v ollama >/dev/null; then
+if [[ "$LLM_PROVIDER" == "omlx" ]]; then
+  if command -v omlx >/dev/null; then
+    info "Using oMLX summarization model: $OMLX_MODEL"
+  else
+    warn "oMLX is the configured provider, but its CLI was not found. Start oMLX and install '$OMLX_MODEL'."
+  fi
+elif command -v ollama >/dev/null; then
   info "Pulling Ollama summarization model: $OLLAMA_MODEL"
   ollama pull "$OLLAMA_MODEL" || warn "Could not pull '$OLLAMA_MODEL'. Make sure Ollama is running, then: ollama pull $OLLAMA_MODEL"
 else

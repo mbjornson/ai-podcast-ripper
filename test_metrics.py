@@ -3,6 +3,7 @@
 import json
 from unittest.mock import patch
 
+import pytest
 import metrics
 
 
@@ -312,3 +313,73 @@ class TestOllamaGenerateNumCtx:
     def test_omits_num_ctx_when_not_given(self):
         body = self._capture()
         assert "num_ctx" not in body["options"]
+
+
+class TestOmlxGenerate:
+    def _capture(self, response=None, **kwargs):
+        captured = {}
+
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps(response or {
+                    "choices": [{"message": {"content": "ok"}}],
+                }).encode()
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["headers"] = dict(req.headers)
+            captured["body"] = json.loads(req.data)
+            return FakeResp()
+
+        with patch("metrics.urllib.request.urlopen", fake_urlopen):
+            result = metrics.omlx_generate("gemma", "prompt", **kwargs)
+        return result, captured
+
+    def test_sends_openai_chat_request(self):
+        result, captured = self._capture(num_ctx=32768, num_predict=777,
+                                         temperature=0.2, base_url="http://omlx/v1",
+                                         api_key="secret")
+        assert result == "ok"
+        assert captured["url"] == "http://omlx/v1/chat/completions"
+        assert captured["headers"]["Authorization"] == "Bearer secret"
+        assert captured["body"] == {
+            "model": "gemma",
+            "messages": [{"role": "user", "content": "prompt"}],
+            "stream": False,
+            "max_tokens": 777,
+            "temperature": 0.2,
+        }
+
+    def test_sends_json_object_response_format(self):
+        _result, captured = self._capture(response={
+            "choices": [{"message": {"content": "{}"}}],
+        }, response_format="json")
+        assert captured["body"]["response_format"] == {"type": "json_object"}
+
+    def test_returns_empty_string_for_missing_choices(self):
+        result, _captured = self._capture(response={"choices": []})
+        assert result == ""
+
+
+class TestConfiguredModel:
+    def test_selects_model_for_omlx_provider_without_ollama_key(self):
+        assert metrics.configured_model({
+            "llm_provider": "omlx",
+            "omlx_model": "gemma",
+        }) == "gemma"
+
+    def test_selects_model_for_ollama_provider_without_omlx_key(self):
+        assert metrics.configured_model({
+            "llm_provider": "ollama",
+            "ollama_model": "gemma3",
+        }) == "gemma3"
+
+    def test_rejects_missing_model_for_selected_provider(self):
+        with pytest.raises(ValueError, match="omlx_model"):
+            metrics.configured_model({"llm_provider": "omlx"})

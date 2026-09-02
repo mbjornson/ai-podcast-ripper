@@ -241,14 +241,18 @@ build_prompt = metrics_mod.build_summary_prompt
 def summarize(transcript, episode_title, podcast_name, model, summary_config,
               max_chars=metrics_mod.DEFAULT_TRANSCRIPT_CHARS,
               max_context=metrics_mod.DEFAULT_MAX_CONTEXT,
-              num_predict=metrics_mod.DEFAULT_NUM_PREDICT):
+              num_predict=metrics_mod.DEFAULT_NUM_PREDICT,
+              provider="ollama", base_url=metrics_mod.OMLX_BASE_URL,
+              api_key=None):
     log.info("Summarizing with %s...", model)
     prompt = build_prompt(summary_config, podcast_name, episode_title, transcript,
                           max_chars=max_chars)
     num_ctx = metrics_mod.context_window_for(prompt, num_predict, ceiling=max_context)
     log.info("Prompt %d chars -> num_ctx %d", len(prompt), num_ctx)
-    return metrics_mod.ollama_generate(model, prompt, num_predict=num_predict,
-                                       temperature=0.3, num_ctx=num_ctx)
+    return metrics_mod.generate_text(
+        model, prompt, provider=provider, num_predict=num_predict,
+        temperature=0.3, num_ctx=num_ctx, base_url=base_url, api_key=api_key,
+    )
 
 
 def parse_episode_date(published):
@@ -394,8 +398,13 @@ def record_episode_metrics(output_path, feed_name, podcast_slug, settings,
 
     judge_result = None
     if metrics_cfg.get("judge_enabled", False) and parsed["sections"].get("Summary"):
-        judge_model = metrics_cfg.get("judge_model") or settings["ollama_model"]
-        judge_result = metrics_mod.judge_episode(parsed, judge_model)
+        judge_model = metrics_cfg.get("judge_model") or metrics_mod.configured_model(settings)
+        judge_result = metrics_mod.judge_episode(
+            parsed, judge_model,
+            provider=settings.get("llm_provider", "ollama"),
+            base_url=settings.get("omlx_base_url", metrics_mod.OMLX_BASE_URL),
+            api_key=settings.get("omlx_api_key"),
+        )
 
     row = metrics_mod.build_metrics_row(
         parsed,
@@ -438,13 +447,17 @@ def process_episode(episode, feed_name, settings):
         t0 = time.monotonic()
         summary = summarize(
             transcript, episode["title"], feed_name,
-            settings["ollama_model"], settings.get("_summary_config", {}),
+            metrics_mod.configured_model(settings),
+            settings.get("_summary_config", {}),
             max_chars=settings.get("max_transcript_chars",
                                    metrics_mod.DEFAULT_TRANSCRIPT_CHARS),
             max_context=settings.get("max_context_tokens",
-                                     metrics_mod.DEFAULT_MAX_CONTEXT),
+                                    metrics_mod.DEFAULT_MAX_CONTEXT),
             num_predict=settings.get("summary_num_predict",
                                      metrics_mod.DEFAULT_NUM_PREDICT),
+            provider=settings.get("llm_provider", "ollama"),
+            base_url=settings.get("omlx_base_url", metrics_mod.OMLX_BASE_URL),
+            api_key=settings.get("omlx_api_key"),
         )
         summarized_seconds = round(time.monotonic() - t0, 1)
 

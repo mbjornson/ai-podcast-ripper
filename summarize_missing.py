@@ -57,12 +57,16 @@ def load_config():
 def summarize(transcript, episode_title, podcast_name, model, summary_config,
               max_chars=metrics_mod.DEFAULT_TRANSCRIPT_CHARS,
               max_context=metrics_mod.DEFAULT_MAX_CONTEXT,
-              num_predict=metrics_mod.DEFAULT_NUM_PREDICT):
+              num_predict=metrics_mod.DEFAULT_NUM_PREDICT,
+              provider="ollama", base_url=metrics_mod.OMLX_BASE_URL,
+              api_key=None):
     prompt = metrics_mod.build_summary_prompt(summary_config, podcast_name, episode_title,
                                               transcript, max_chars=max_chars)
     num_ctx = metrics_mod.context_window_for(prompt, num_predict, ceiling=max_context)
-    return metrics_mod.ollama_generate(model, prompt, num_predict=num_predict,
-                                       temperature=0.3, num_ctx=num_ctx)
+    return metrics_mod.generate_text(
+        model, prompt, provider=provider, num_predict=num_predict,
+        temperature=0.3, num_ctx=num_ctx, base_url=base_url, api_key=api_key,
+    )
 
 
 def patch_file(path, summary):
@@ -81,7 +85,10 @@ def patch_file(path, summary):
 def main():
     config = load_config()
     settings = config["settings"]
-    model = settings["ollama_model"]
+    provider = settings.get("llm_provider", "ollama")
+    model = metrics_mod.configured_model(settings)
+    base_url = settings.get("omlx_base_url", metrics_mod.OMLX_BASE_URL)
+    api_key = settings.get("omlx_api_key")
     summary_config = config.get("summary", {})
     max_chars = settings.get("max_transcript_chars", metrics_mod.DEFAULT_TRANSCRIPT_CHARS)
     max_context = settings.get("max_context_tokens", metrics_mod.DEFAULT_MAX_CONTEXT)
@@ -107,7 +114,8 @@ def main():
         print(f"[{i}/{total}] Summarizing: {path.name}", flush=True)
         summary = summarize(transcript, episode_title, podcast_name, model,
                             summary_config, max_chars=max_chars,
-                            max_context=max_context, num_predict=num_predict)
+                            max_context=max_context, num_predict=num_predict,
+                            provider=provider, base_url=base_url, api_key=api_key)
         if not summary:
             print("  FAILED")
             continue

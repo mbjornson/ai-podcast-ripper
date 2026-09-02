@@ -85,8 +85,9 @@ def load_config():
         return yaml.safe_load(f) or {}
 
 
-def extract_entities(parsed, model, timeout=120):
-    """Single Ollama call. Returns entities dict (all kinds), or None on failure."""
+def extract_entities(parsed, model, timeout=120, provider="ollama",
+                     base_url=metrics_mod.OMLX_BASE_URL, api_key=None):
+    """Single local-model call. Returns entities dict, or None on failure."""
     fm = parsed["frontmatter"]
     sections = parsed["sections"]
     prompt = EXTRACT_PROMPT.format(
@@ -97,8 +98,11 @@ def extract_entities(parsed, model, timeout=120):
         tools=sections.get("Tools & Resources", "")[:1500],
         action_items=sections.get("Action Items", "")[:1500],
     )
-    raw = metrics_mod.ollama_generate(model, prompt, num_predict=2048, temperature=0.1,
-                                       response_format="json", timeout=timeout)
+    raw = metrics_mod.generate_text(
+        model, prompt, provider=provider, num_predict=2048, temperature=0.1,
+        response_format="json", timeout=timeout, base_url=base_url,
+        api_key=api_key,
+    )
     if not raw:
         return None
     return _parse_response(raw)
@@ -154,7 +158,8 @@ def load_existing():
     return existing
 
 
-def cmd_extract(model, force=False, limit=0, podcast_filter=""):
+def cmd_extract(model, force=False, limit=0, podcast_filter="", provider="ollama",
+                base_url=metrics_mod.OMLX_BASE_URL, api_key=None):
     existing = load_existing()
     log.info("Loaded %d existing entity rows", len(existing))
 
@@ -179,7 +184,8 @@ def cmd_extract(model, force=False, limit=0, podcast_filter=""):
             continue
 
         log.info("[%d/%d] Extracting: %s", i, total, path.name)
-        entities = extract_entities(parsed, model)
+        entities = extract_entities(parsed, model, provider=provider,
+                                     base_url=base_url, api_key=api_key)
         if entities is None:
             log.warning("  Skipped (extraction failed)")
             continue
@@ -307,10 +313,18 @@ def main():
 
     config = load_config()
     metrics_cfg = config.get("metrics", {})
-    model = config.get("entities", {}).get("model") or metrics_cfg.get("judge_model") or "llama3"
+    settings = config.get("settings", {})
+    provider = settings.get("llm_provider", "ollama")
+    model = config.get("entities", {}).get("model") or metrics_cfg.get("judge_model")
+    if not model:
+        model = metrics_mod.configured_model(settings)
+    base_url = settings.get("omlx_base_url", metrics_mod.OMLX_BASE_URL)
+    api_key = settings.get("omlx_api_key")
 
     if args.extract:
-        cmd_extract(model, force=args.force, limit=args.limit, podcast_filter=args.podcast)
+        cmd_extract(model, force=args.force, limit=args.limit,
+                    podcast_filter=args.podcast, provider=provider,
+                    base_url=base_url, api_key=api_key)
     elif args.top:
         cmd_top(args.top, k=args.k, podcast_slug=args.podcast or None)
     else:

@@ -13,10 +13,21 @@ from pathlib import Path
 import yaml
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
+OMLX_BASE_URL = "http://127.0.0.1:10000/v1"
 SCHEMA_VERSION = 1
 BASE_DIR = Path(__file__).parent
 
 log = logging.getLogger("metrics")
+
+
+def configured_model(settings):
+    """Return the model configured for the selected local provider."""
+    provider = settings.get("llm_provider", "ollama")
+    model_key = "omlx_model" if provider == "omlx" else "ollama_model"
+    model = settings.get(model_key)
+    if not model:
+        raise ValueError(f"Missing required setting: {model_key}")
+    return model
 
 LOW_SIGNAL_RE = re.compile(
     r"low signal|mostly entertainment|no clear action|limited actionable",
@@ -200,8 +211,9 @@ Then output ONLY this JSON, nothing else:
 {{"actionability": <1-10>, "signal_density": <1-10>, "would_recommend": <true only if actionability >= 7>, "rationale": "<one sentence — name the specific tactic/tool OR the specific weakness>"}}"""
 
 
-def judge_episode(parsed, model, timeout=120):
-    """Single Ollama call. Returns judge dict or None on failure."""
+def judge_episode(parsed, model, timeout=120, provider="ollama",
+                  base_url=OMLX_BASE_URL, api_key=None):
+    """Single local-model call. Returns judge dict or None on failure."""
     fm = parsed["frontmatter"]
     sections = parsed["sections"]
 
@@ -212,8 +224,11 @@ def judge_episode(parsed, model, timeout=120):
         key_points=sections.get("Key Points", "")[:2000],
         action_items=sections.get("Action Items", "")[:1500],
     )
-    raw = ollama_generate(model, prompt, num_predict=1024, temperature=0.2,
-                          response_format="json", timeout=timeout)
+    raw = generate_text(
+        model, prompt, provider=provider, num_predict=1024, temperature=0.2,
+        response_format="json", timeout=timeout, base_url=base_url,
+        api_key=api_key,
+    )
     return parse_judge_response(raw) if raw else None
 
 
@@ -300,6 +315,52 @@ def ollama_generate(model, prompt, num_predict=2048, temperature=0.3,
     except Exception as e:
         log.warning("Ollama call failed (%s): %s", model, e)
         return None
+
+
+def omlx_generate(model, prompt, num_predict=2048, temperature=0.3,
+                  response_format=None, timeout=300,
+                  base_url=OMLX_BASE_URL, api_key=None, num_ctx=None):
+    """POST to oMLX's OpenAI-compatible chat API. Returns response text."""
+    del num_ctx  # oMLX sizes context from the model/server configuration.
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "max_tokens": num_predict,
+        "temperature": temperature,
+    }
+    if response_format:
+        body["response_format"] = {
+            "type": "json_object" if response_format == "json" else response_format,
+        }
+    url = base_url.rstrip("/") + "/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode(), headers=headers, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            result = json.loads(resp.read())
+            choices = result.get("choices") or []
+            if not choices:
+                return ""
+            return (choices[0].get("message") or {}).get("content", "") or ""
+    except Exception as e:
+        log.warning("oMLX call failed (%s): %s", model, e)
+        return None
+
+
+def generate_text(model, prompt, provider="ollama", **kwargs):
+    """Generate text through the configured local model provider."""
+    if provider == "omlx":
+        return omlx_generate(model, prompt, **kwargs)
+    if provider == "ollama":
+        kwargs.pop("base_url", None)
+        kwargs.pop("api_key", None)
+        return ollama_generate(model, prompt, **kwargs)
+    raise ValueError(f"Unsupported model provider: {provider}")
 
 
 def parse_json_with_fallback(raw, pattern=r"\{.*?\}"):

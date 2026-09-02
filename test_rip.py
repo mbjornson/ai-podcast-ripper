@@ -855,6 +855,40 @@ class TestSummarizeWiring:
         captured = self._call("d" * 2_000_000, max_chars=0, max_context=32768)
         assert captured["num_ctx"] == 32768
 
+    def test_uses_configured_omlx_provider(self):
+        captured = {}
+
+        def fake_generate(model, prompt, **kw):
+            captured.update(kw)
+            return "summary text"
+
+        with patch("rip.metrics_mod.omlx_generate", fake_generate):
+            rip.summarize("transcript", "Ep", "Pod", "gemma", {},
+                          provider="omlx", base_url="http://omlx/v1",
+                          api_key="secret")
+        assert captured["base_url"] == "http://omlx/v1"
+        assert captured["api_key"] == "secret"
+
+    def test_process_episode_supports_omlx_only_settings(self):
+        captured = {}
+
+        def fake_summarize(*args, **kwargs):
+            captured["model"] = args[3]
+            captured.update(kwargs)
+            return "summary"
+
+        settings = {
+            "llm_provider": "omlx", "omlx_model": "gemma", "whisper_model": "w",
+            "_summary_config": {},
+        }
+        ep = {"title": "T", "audio_url": "http://x/a.mp3", "published": "",
+              "transcript_url": "http://x/t.txt", "transcript_type": "text/plain"}
+        with patch("rip.summarize", fake_summarize), \
+             patch("rip.fetch_transcript", lambda *a, **k: "some transcript"), \
+             patch("rip.write_markdown"), patch("rip.record_episode_metrics"):
+            rip.process_episode(ep, "Feed", settings)
+        assert captured["model"] == "gemma"
+
 
 class TestSummaryNumPredict:
     def _call(self, **kwargs):
