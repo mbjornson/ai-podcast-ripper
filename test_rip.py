@@ -2,6 +2,7 @@
 # pylint: disable=too-many-lines
 
 import json
+import logging
 from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -837,6 +838,24 @@ class TestMainNotifyWiring:
 
 
 class TestSummarizeWiring:
+    def test_generate_forwards_timeout_and_logs_request_label(self, caplog):  # pylint: disable=protected-access
+        caplog.set_level(logging.INFO, logger="podcast-ripper")
+        captured = {}
+
+        def fake_generate(model, prompt, **kwargs):
+            captured.update(kwargs)
+            return "result"
+
+        with patch("rip.metrics_mod.generate_text", fake_generate):
+            result = rip._generate(  # pylint: disable=protected-access
+                "prompt", "gemma", "omlx", "http://omlx/v1", "key", 100,
+                1000, timeout=17, request_label="chunk 1/2",
+            )
+
+        assert result == "result"
+        assert captured["timeout"] == 17
+        assert "chunk 1/2" in caplog.text
+
     def _call(self, transcript, **kwargs):
         captured = {}
         kwargs.setdefault("chunk_chars", 10_000_000)
