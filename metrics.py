@@ -319,7 +319,8 @@ def ollama_generate(model, prompt, num_predict=2048, temperature=0.3,
 
 def omlx_generate(model, prompt, num_predict=2048, temperature=0.3,
                   response_format=None, timeout=300,
-                  base_url=OMLX_BASE_URL, api_key=None, num_ctx=None):
+                  base_url=OMLX_BASE_URL, api_key=None, num_ctx=None,
+                  chat_template_kwargs=None):
     """POST to oMLX's OpenAI-compatible chat API. Returns response text."""
     del num_ctx  # oMLX sizes context from the model/server configuration.
     body = {
@@ -333,6 +334,8 @@ def omlx_generate(model, prompt, num_predict=2048, temperature=0.3,
         body["response_format"] = {
             "type": "json_object" if response_format == "json" else response_format,
         }
+    if chat_template_kwargs:
+        body["chat_template_kwargs"] = chat_template_kwargs
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -359,6 +362,7 @@ def generate_text(model, prompt, provider="ollama", **kwargs):
     if provider == "ollama":
         kwargs.pop("base_url", None)
         kwargs.pop("api_key", None)
+        kwargs.pop("chat_template_kwargs", None)
         return ollama_generate(model, prompt, **kwargs)
     raise ValueError(f"Unsupported model provider: {provider}")
 

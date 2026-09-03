@@ -362,6 +362,14 @@ class TestOmlxGenerate:
         }, response_format="json")
         assert captured["body"]["response_format"] == {"type": "json_object"}
 
+    def test_sends_chat_template_kwargs(self):
+        _result, captured = self._capture(
+            chat_template_kwargs={"enable_thinking": False},
+        )
+        assert captured["body"]["chat_template_kwargs"] == {
+            "enable_thinking": False,
+        }
+
     def test_returns_empty_string_for_missing_choices(self):
         result, _captured = self._capture(response={"choices": []})
         assert result == ""

@@ -85,6 +85,10 @@ transcripts/<podcast-name>/<publish-date>--<episode-title>.md
 
 Each file includes YAML frontmatter, a summary, key points, notable quotes, and action items.
 
+Long transcripts are summarized in bounded overlapping chunks and then synthesized
+into the same sections. If summarization fails, the episode remains retryable and
+downloaded audio is retained for the next run.
+
 ### Raw transcript corpus
 
 The full plain-text transcript of every episode is stored separately under:
@@ -142,6 +146,9 @@ All settings live in `config.yaml`:
 | `omlx_base_url` | `http://127.0.0.1:10000/v1` | oMLX OpenAI-compatible API base URL |
 | `omlx_api_key` | — | Optional oMLX API key |
 | `ollama_model` | `gemma3` | Ollama fallback model |
+| `summary_chunk_chars` | `60000` | Chunk size for long-transcript summarization |
+| `summary_chunk_overlap_chars` | `1000` | Overlap between long-transcript chunks |
+| `summary_chunk_num_predict` | `4096` | Output budget for each long-transcript chunk |
 | `max_episodes_per_feed` | `3` | Max new episodes to process per feed per run |
 | `backfill_episodes` | `3` | Older episodes to grab when no new ones exist |
 | `keep_audio` | `false` | Keep downloaded audio files after transcription |

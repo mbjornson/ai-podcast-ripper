@@ -237,22 +237,85 @@ def transcribe(audio_path, model_name):
 # Re-exported from metrics_mod so existing tests + callers keep their import surface.
 build_prompt = metrics_mod.build_summary_prompt
 
+SUMMARY_CHUNK_CHARS = 60000
+SUMMARY_CHUNK_OVERLAP = 1000
+SUMMARY_CHUNK_NUM_PREDICT = metrics_mod.DEFAULT_NUM_PREDICT
+
+
+def chunk_transcript(transcript, chunk_chars, overlap):
+    """Split transcript into overlapping character-bounded chunks."""
+    if chunk_chars <= 0:
+        raise ValueError("chunk_chars must be positive")
+    if overlap < 0 or overlap >= chunk_chars:
+        raise ValueError("overlap must be >= 0 and smaller than chunk_chars")
+    chunks = []
+    start = 0
+    while start < len(transcript):
+        end = min(start + chunk_chars, len(transcript))
+        chunks.append(transcript[start:end])
+        if end == len(transcript):
+            break
+        start = end - overlap
+    return chunks
+
+
+def _generate(prompt, model, provider, base_url, api_key, num_predict,
+              max_context, chat_template_kwargs=None):
+    num_ctx = metrics_mod.context_window_for(prompt, num_predict, ceiling=max_context)
+    return metrics_mod.generate_text(
+        model, prompt, provider=provider, num_predict=num_predict,
+        temperature=0.3, num_ctx=num_ctx, base_url=base_url, api_key=api_key,
+        chat_template_kwargs=chat_template_kwargs,
+    )
+
+
+def _chunk_prompt(podcast_name, episode_title, chunk, index, total):
+    return (
+        "You are preparing factual notes for a podcast episode summary. "
+        "Extract the specific claims, names, numbers, tools, quotes, and "
+        "actionable advice from this transcript segment. Do not invent or "
+        "generalize. These notes will be synthesized with other segments.\n\n"
+        f"Podcast: {podcast_name}\nEpisode: {episode_title}\n"
+        f"Segment {index} of {total}:\n\n{chunk}"
+    )
+
 
 def summarize(transcript, episode_title, podcast_name, model, summary_config,
               max_chars=metrics_mod.DEFAULT_TRANSCRIPT_CHARS,
               max_context=metrics_mod.DEFAULT_MAX_CONTEXT,
               num_predict=metrics_mod.DEFAULT_NUM_PREDICT,
               provider="ollama", base_url=metrics_mod.OMLX_BASE_URL,
-              api_key=None):
+              api_key=None, chunk_chars=SUMMARY_CHUNK_CHARS,
+              chunk_overlap=SUMMARY_CHUNK_OVERLAP,
+              chunk_num_predict=SUMMARY_CHUNK_NUM_PREDICT):
     log.info("Summarizing with %s...", model)
-    prompt = build_prompt(summary_config, podcast_name, episode_title, transcript,
-                          max_chars=max_chars)
-    num_ctx = metrics_mod.context_window_for(prompt, num_predict, ceiling=max_context)
-    log.info("Prompt %d chars -> num_ctx %d", len(prompt), num_ctx)
-    return metrics_mod.generate_text(
-        model, prompt, provider=provider, num_predict=num_predict,
-        temperature=0.3, num_ctx=num_ctx, base_url=base_url, api_key=api_key,
-    )
+    source = transcript[:max_chars] if max_chars else transcript
+    if len(source) <= chunk_chars:
+        prompt = build_prompt(summary_config, podcast_name, episode_title, source,
+                              max_chars=0)
+        log.info("Prompt %d chars -> single-pass summary", len(prompt))
+        return _generate(prompt, model, provider, base_url, api_key, num_predict,
+                         max_context)
+
+    chunks = chunk_transcript(source, chunk_chars, chunk_overlap)
+    log.info("Long transcript: summarizing %d chunks", len(chunks))
+    notes = []
+    for index, chunk in enumerate(chunks, 1):
+        prompt = _chunk_prompt(podcast_name, episode_title, chunk, index, len(chunks))
+        note = _generate(prompt, model, provider, base_url, api_key,
+                         chunk_num_predict, max_context,
+                         chat_template_kwargs={"enable_thinking": False})
+        if not note:
+            log.warning("Chunk %d/%d summarization failed", index, len(chunks))
+            return None
+        notes.append(f"Segment {index}:\n{note}")
+
+    synthesis_input = "\n\n".join(notes)
+    prompt = build_prompt(summary_config, podcast_name, episode_title,
+                          synthesis_input, max_chars=0)
+    log.info("Synthesizing %d chunk notes (%d chars)", len(notes), len(prompt))
+    return _generate(prompt, model, provider, base_url, api_key, num_predict,
+                     max_context)
 
 
 def parse_episode_date(published):
@@ -422,6 +485,7 @@ def process_episode(episode, feed_name, settings):
     slug = slugify(f"{feed_name}--{episode['title']}")
     audio_ext = Path(episode["audio_url"].split("?")[0]).suffix or ".mp3"
     audio_path = TMP_DIR / f"{slug}{audio_ext}"
+    completed = False
 
     try:
         transcript = None
@@ -455,11 +519,20 @@ def process_episode(episode, feed_name, settings):
                                     metrics_mod.DEFAULT_MAX_CONTEXT),
             num_predict=settings.get("summary_num_predict",
                                      metrics_mod.DEFAULT_NUM_PREDICT),
+            chunk_chars=settings.get("summary_chunk_chars", SUMMARY_CHUNK_CHARS),
+            chunk_overlap=settings.get("summary_chunk_overlap_chars",
+                                      SUMMARY_CHUNK_OVERLAP),
+            chunk_num_predict=settings.get("summary_chunk_num_predict",
+                                          SUMMARY_CHUNK_NUM_PREDICT),
             provider=settings.get("llm_provider", "ollama"),
             base_url=settings.get("omlx_base_url", metrics_mod.OMLX_BASE_URL),
             api_key=settings.get("omlx_api_key"),
         )
         summarized_seconds = round(time.monotonic() - t0, 1)
+
+        if not summary:
+            log.error("Summarization failed; leaving episode retryable: %s", episode["title"])
+            return None
 
         ep_date = parse_episode_date(episode.get("published", ""))
         podcast_slug = slugify(feed_name)
@@ -474,10 +547,11 @@ def process_episode(episode, feed_name, settings):
             output_path, feed_name, podcast_slug, settings,
             transcribed_seconds, summarized_seconds,
         )
+        completed = True
         return output_path
 
     finally:
-        if not settings.get("keep_audio", False):
+        if not settings.get("keep_audio", False) and completed:
             audio_path.unlink(missing_ok=True)
             for f in TMP_DIR.glob(f"{slug}*"):
                 f.unlink(missing_ok=True)
