@@ -1,4 +1,5 @@
 """Tests for rip.py"""
+# pylint: disable=too-many-lines
 
 import json
 from datetime import date, datetime
@@ -827,6 +828,7 @@ class TestMainNotifyWiring:
 class TestSummarizeWiring:
     def _call(self, transcript, **kwargs):
         captured = {}
+        kwargs.setdefault("chunk_chars", 10_000_000)
 
         def fake_generate(model, prompt, **kw):
             captured["prompt"] = prompt
@@ -889,10 +891,80 @@ class TestSummarizeWiring:
             rip.process_episode(ep, "Feed", settings)
         assert captured["model"] == "gemma"
 
+    def test_long_transcript_uses_chunk_synthesis(self):
+        calls = []
+        budgets = []
+        template_kwargs = []
+
+        def fake_generate(model, prompt, **kwargs):
+            calls.append(prompt)
+            budgets.append(kwargs["num_predict"])
+            template_kwargs.append(kwargs.get("chat_template_kwargs"))
+            return "chunk notes" if len(calls) < 3 else "final summary"
+
+        with patch("rip.metrics_mod.generate_text", fake_generate):
+            result = rip.summarize(
+                "abcdefghijklmnopqrstuvwxyz", "Ep", "Pod", "gemma", {},
+                max_chars=0, chunk_chars=10, chunk_overlap=2,
+            )
+
+        assert result == "final summary"
+        assert len(calls) > 3
+        assert "chunk notes" in calls[-1]
+        assert budgets[:-1] == [4096] * (len(budgets) - 1)
+        assert template_kwargs[:-1] == [{"enable_thinking": False}] * (len(template_kwargs) - 1)
+
+    def test_failed_long_transcript_returns_no_summary(self):
+        calls = []
+
+        def fake_generate(model, prompt, **kwargs):
+            calls.append(prompt)
+
+        with patch("rip.metrics_mod.generate_text", fake_generate):
+            result = rip.summarize(
+                "abcdefghijklmnopqrstuvwxyz", "Ep", "Pod", "gemma", {},
+                max_chars=0, chunk_chars=10, chunk_overlap=2,
+            )
+
+        assert result is None
+        assert len(calls) == 1
+
+
+class TestProcessEpisodeSummaryFailure:  # pylint: disable=too-few-public-methods
+    def test_does_not_write_or_mark_failed_summary(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(rip, "TRANSCRIPTS_DIR", tmp_path / "transcripts")
+        monkeypatch.setattr(rip, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(rip, "TMP_DIR", tmp_path / "tmp")
+        rip.TMP_DIR.mkdir()
+
+        def fake_download(_url, dest):
+            dest.write_bytes(b"audio")
+
+        episode = {
+            "title": "Failed Summary", "audio_url": "http://example.com/ep.mp3",
+            "published": "", "transcript_url": None, "transcript_type": "",
+            "guid": "guid-failed-summary",
+        }
+        settings = {"whisper_model": "medium", "ollama_model": "gemma3",
+                    "_summary_config": {}}
+        with patch("rip.download_audio", fake_download), \
+             patch("rip.get_audio_duration", return_value="30:00"), \
+             patch("rip.transcribe", return_value="transcript"), \
+             patch("rip.summarize", return_value=None), \
+             patch("rip.write_markdown") as write_markdown, \
+             patch("rip.record_episode_metrics") as record_metrics:
+            result = rip.process_episode(episode, "Test Pod", settings)
+
+        assert result is None
+        write_markdown.assert_not_called()
+        record_metrics.assert_not_called()
+        assert list((tmp_path / "tmp").glob("*.mp3"))
+
 
 class TestSummaryNumPredict:
     def _call(self, **kwargs):
         captured = {}
+        kwargs.setdefault("chunk_chars", 10_000_000)
 
         def fake_generate(model, prompt, **kw):
             captured.update(kw)

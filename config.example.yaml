@@ -19,6 +19,10 @@ settings:
   # Output token budget. Reasoning models (qwen3.8) spend this on thinking
   # before writing; 2048 truncated summaries and dropped sections.
   summary_num_predict: 4096
+  # Long transcripts are summarized in chunks before final synthesis.
+  summary_chunk_chars: 60000
+  summary_chunk_overlap_chars: 1000
+  summary_chunk_num_predict: 4096
   backfill_episodes: 3
   keep_audio: false
 

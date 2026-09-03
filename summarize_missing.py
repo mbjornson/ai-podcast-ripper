@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 
 import metrics as metrics_mod
+import rip
 
 BASE_DIR = Path(__file__).parent
 CONFIG_PATH = BASE_DIR / "config.yaml"
@@ -59,10 +60,20 @@ def summarize(transcript, episode_title, podcast_name, model, summary_config,
               max_context=metrics_mod.DEFAULT_MAX_CONTEXT,
               num_predict=metrics_mod.DEFAULT_NUM_PREDICT,
               provider="ollama", base_url=metrics_mod.OMLX_BASE_URL,
-              api_key=None):
+              api_key=None, chunk_chars=rip.SUMMARY_CHUNK_CHARS,
+              chunk_overlap=rip.SUMMARY_CHUNK_OVERLAP,
+              chunk_num_predict=rip.SUMMARY_CHUNK_NUM_PREDICT):
     prompt = metrics_mod.build_summary_prompt(summary_config, podcast_name, episode_title,
                                               transcript, max_chars=max_chars)
     num_ctx = metrics_mod.context_window_for(prompt, num_predict, ceiling=max_context)
+    if len(transcript[:max_chars] if max_chars else transcript) > chunk_chars:
+        return rip.summarize(
+            transcript, episode_title, podcast_name, model, summary_config,
+            max_chars=max_chars, max_context=max_context, num_predict=num_predict,
+            provider=provider, base_url=base_url, api_key=api_key,
+            chunk_chars=chunk_chars, chunk_overlap=chunk_overlap,
+            chunk_num_predict=chunk_num_predict,
+        )
     return metrics_mod.generate_text(
         model, prompt, provider=provider, num_predict=num_predict,
         temperature=0.3, num_ctx=num_ctx, base_url=base_url, api_key=api_key,
@@ -93,6 +104,10 @@ def main():
     max_chars = settings.get("max_transcript_chars", metrics_mod.DEFAULT_TRANSCRIPT_CHARS)
     max_context = settings.get("max_context_tokens", metrics_mod.DEFAULT_MAX_CONTEXT)
     num_predict = settings.get("summary_num_predict", metrics_mod.DEFAULT_NUM_PREDICT)
+    chunk_chars = settings.get("summary_chunk_chars", rip.SUMMARY_CHUNK_CHARS)
+    chunk_overlap = settings.get("summary_chunk_overlap_chars", rip.SUMMARY_CHUNK_OVERLAP)
+    chunk_num_predict = settings.get("summary_chunk_num_predict",
+                                    rip.SUMMARY_CHUNK_NUM_PREDICT)
 
     total = len(MISSING)
     for i, rel in enumerate(MISSING, 1):
@@ -115,7 +130,9 @@ def main():
         summary = summarize(transcript, episode_title, podcast_name, model,
                             summary_config, max_chars=max_chars,
                             max_context=max_context, num_predict=num_predict,
-                            provider=provider, base_url=base_url, api_key=api_key)
+                            provider=provider, base_url=base_url, api_key=api_key,
+                            chunk_chars=chunk_chars, chunk_overlap=chunk_overlap,
+                            chunk_num_predict=chunk_num_predict)
         if not summary:
             print("  FAILED")
             continue
