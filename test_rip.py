@@ -944,6 +944,18 @@ class TestSummarizeWiring:
         assert budgets[:-1] == [4096] * (len(budgets) - 1)
         assert template_kwargs[:-1] == [{"enable_thinking": False}] * (len(template_kwargs) - 1)
 
+    def test_summary_filters_resource_output_against_transcript(self):
+        generated = "## Tools & Resources\n- Timeline\n- Shopify\n"
+
+        with patch("rip.metrics_mod.generate_text", return_value=generated):
+            result = rip.summarize(
+                "The guest uses Shopify for the store.", "Ep", "Pod", "gemma", {},
+                max_chars=0, chunk_chars=10_000_000,
+            )
+
+        assert "- Shopify" in result
+        assert "- Timeline" not in result
+
     def test_failed_long_transcript_returns_no_summary(self):
         calls = []
 

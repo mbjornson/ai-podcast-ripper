@@ -35,6 +35,11 @@ LOW_SIGNAL_RE = re.compile(
 )
 
 SECTION_HEADINGS = ["Summary", "Key Points", "Tools & Resources", "Quotable", "Action Items"]
+GENERIC_RESOURCE_NAMES = frozenset({
+    "concept", "concepts", "function", "functions", "framework", "frameworks",
+    "method", "methods", "process", "processes", "strategy", "strategies",
+    "timeline", "timelines",
+})
 
 
 def parse_frontmatter(text):
@@ -66,6 +71,48 @@ def extract_sections(markdown_text, section_headings=None):
         if heading in section_headings:
             sections[heading] = body
     return sections
+
+
+def _resource_name(item):
+    """Extract the likely named resource from a rendered bullet."""
+    item = re.sub(r"[*_`]", "", item).strip()
+    return re.split(r"\s*[:(]\s*", item, maxsplit=1)[0].strip()
+
+
+def _resource_is_mentioned(item, transcript):
+    """Return whether a resource bullet has textual evidence in the transcript."""
+    item_lower = item.casefold()
+    transcript_lower = transcript.casefold()
+    if item_lower in transcript_lower:
+        return True
+    name = _resource_name(item)
+    if name.casefold() in GENERIC_RESOURCE_NAMES:
+        return False
+    if name.casefold() in transcript_lower:
+        return True
+    if ":" in item:
+        return any(part.strip().casefold() in transcript_lower
+                   for part in item.split(":", 1)[1].split(",") if part.strip())
+    return False
+
+
+def validate_tools_and_resources(summary, transcript):
+    """Remove unsupported or generic bullets from the resource section."""
+    pattern = re.compile(r"(?ms)(^## Tools & Resources\n)(.*?)(?=^## |\Z)")
+    match = pattern.search(summary or "")
+    if not match:
+        return summary
+
+    kept = []
+    for line in match.group(2).strip().splitlines():
+        if not line.startswith("- ") or line == "- None identified.":
+            kept.append(line)
+            continue
+        item = line[2:].strip()
+        if _resource_is_mentioned(item, transcript):
+            kept.append(line)
+    replacement = match.group(1) + ("\n".join(kept) or "- None identified.") + "\n"
+    return summary[:match.start()] + replacement + summary[match.end():]
 
 
 def extract_transcript(md_path):

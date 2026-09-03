@@ -101,6 +101,25 @@ class TestExtractSections:
         sections = metrics.extract_sections(body)
         assert "First Insight" in sections["Key Points"]
 
+    def test_filters_unmentioned_and_generic_resources(self):
+        summary = """## Summary
+Useful episode.
+
+## Tools & Resources
+- Timeline
+- Shopify
+- Not Mentioned
+
+## Action Items
+- [ ] Try Shopify
+"""
+        result = metrics.validate_tools_and_resources(
+            summary, "The guest recommends Shopify for the store."
+        )
+        assert "- Shopify" in result
+        assert "- Timeline" not in result
+        assert "- Not Mentioned" not in result
+
 
 class TestParseDuration:
     def test_hms(self):
