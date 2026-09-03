@@ -240,6 +240,7 @@ build_prompt = metrics_mod.build_summary_prompt
 SUMMARY_CHUNK_CHARS = 60000
 SUMMARY_CHUNK_OVERLAP = 1000
 SUMMARY_CHUNK_NUM_PREDICT = metrics_mod.DEFAULT_NUM_PREDICT
+SUMMARY_REQUEST_TIMEOUT = 300
 
 
 def chunk_transcript(transcript, chunk_chars, overlap):
@@ -260,13 +261,20 @@ def chunk_transcript(transcript, chunk_chars, overlap):
 
 
 def _generate(prompt, model, provider, base_url, api_key, num_predict,
-              max_context, chat_template_kwargs=None):
+              max_context, chat_template_kwargs=None,
+              timeout=SUMMARY_REQUEST_TIMEOUT, request_label="summary"):
     num_ctx = metrics_mod.context_window_for(prompt, num_predict, ceiling=max_context)
-    return metrics_mod.generate_text(
+    started = time.monotonic()
+    log.info("LLM request started: %s", request_label)
+    result = metrics_mod.generate_text(
         model, prompt, provider=provider, num_predict=num_predict,
         temperature=0.3, num_ctx=num_ctx, base_url=base_url, api_key=api_key,
-        chat_template_kwargs=chat_template_kwargs,
+        chat_template_kwargs=chat_template_kwargs, timeout=timeout,
     )
+    elapsed = time.monotonic() - started
+    log.info("LLM request finished: %s elapsed_seconds=%.1f result_chars=%d",
+             request_label, elapsed, len(result or ""))
+    return result
 
 
 def _chunk_prompt(podcast_name, episode_title, chunk, index, total):
@@ -287,15 +295,18 @@ def summarize(transcript, episode_title, podcast_name, model, summary_config,
               provider="ollama", base_url=metrics_mod.OMLX_BASE_URL,
               api_key=None, chunk_chars=SUMMARY_CHUNK_CHARS,
               chunk_overlap=SUMMARY_CHUNK_OVERLAP,
-              chunk_num_predict=SUMMARY_CHUNK_NUM_PREDICT):
+              chunk_num_predict=SUMMARY_CHUNK_NUM_PREDICT,
+              request_timeout=SUMMARY_REQUEST_TIMEOUT):
     log.info("Summarizing with %s...", model)
     source = transcript[:max_chars] if max_chars else transcript
     if len(source) <= chunk_chars:
         prompt = build_prompt(summary_config, podcast_name, episode_title, source,
                               max_chars=0)
         log.info("Prompt %d chars -> single-pass summary", len(prompt))
-        return _generate(prompt, model, provider, base_url, api_key, num_predict,
-                         max_context)
+        result = _generate(prompt, model, provider, base_url, api_key, num_predict,
+                           max_context, timeout=request_timeout,
+                           request_label="single-pass summary")
+        return metrics_mod.validate_tools_and_resources(result, source)
 
     chunks = chunk_transcript(source, chunk_chars, chunk_overlap)
     log.info("Long transcript: summarizing %d chunks", len(chunks))
@@ -304,7 +315,9 @@ def summarize(transcript, episode_title, podcast_name, model, summary_config,
         prompt = _chunk_prompt(podcast_name, episode_title, chunk, index, len(chunks))
         note = _generate(prompt, model, provider, base_url, api_key,
                          chunk_num_predict, max_context,
-                         chat_template_kwargs={"enable_thinking": False})
+                         chat_template_kwargs={"enable_thinking": False},
+                         timeout=request_timeout,
+                         request_label=f"summary chunk {index}/{len(chunks)}")
         if not note:
             log.warning("Chunk %d/%d summarization failed", index, len(chunks))
             return None
@@ -314,8 +327,10 @@ def summarize(transcript, episode_title, podcast_name, model, summary_config,
     prompt = build_prompt(summary_config, podcast_name, episode_title,
                           synthesis_input, max_chars=0)
     log.info("Synthesizing %d chunk notes (%d chars)", len(notes), len(prompt))
-    return _generate(prompt, model, provider, base_url, api_key, num_predict,
-                     max_context)
+    result = _generate(prompt, model, provider, base_url, api_key, num_predict,
+                       max_context, timeout=request_timeout,
+                       request_label="chunk synthesis")
+    return metrics_mod.validate_tools_and_resources(result, source)
 
 
 def parse_episode_date(published):

@@ -2,6 +2,7 @@
 # pylint: disable=too-many-lines
 
 import json
+import logging
 from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -837,6 +838,24 @@ class TestMainNotifyWiring:
 
 
 class TestSummarizeWiring:
+    def test_generate_forwards_timeout_and_logs_request_label(self, caplog):  # pylint: disable=protected-access
+        caplog.set_level(logging.INFO, logger="podcast-ripper")
+        captured = {}
+
+        def fake_generate(model, prompt, **kwargs):
+            captured.update(kwargs)
+            return "result"
+
+        with patch("rip.metrics_mod.generate_text", fake_generate):
+            result = rip._generate(  # pylint: disable=protected-access
+                "prompt", "gemma", "omlx", "http://omlx/v1", "key", 100,
+                1000, timeout=17, request_label="chunk 1/2",
+            )
+
+        assert result == "result"
+        assert captured["timeout"] == 17
+        assert "chunk 1/2" in caplog.text
+
     def _call(self, transcript, **kwargs):
         captured = {}
         kwargs.setdefault("chunk_chars", 10_000_000)
@@ -924,6 +943,18 @@ class TestSummarizeWiring:
         assert "chunk notes" in calls[-1]
         assert budgets[:-1] == [4096] * (len(budgets) - 1)
         assert template_kwargs[:-1] == [{"enable_thinking": False}] * (len(template_kwargs) - 1)
+
+    def test_summary_filters_resource_output_against_transcript(self):
+        generated = "## Tools & Resources\n- Timeline\n- Shopify\n"
+
+        with patch("rip.metrics_mod.generate_text", return_value=generated):
+            result = rip.summarize(
+                "The guest uses Shopify for the store.", "Ep", "Pod", "gemma", {},
+                max_chars=0, chunk_chars=10_000_000,
+            )
+
+        assert "- Shopify" in result
+        assert "- Timeline" not in result
 
     def test_failed_long_transcript_returns_no_summary(self):
         calls = []

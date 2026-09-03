@@ -101,6 +101,45 @@ class TestExtractSections:
         sections = metrics.extract_sections(body)
         assert "First Insight" in sections["Key Points"]
 
+    def test_filters_unmentioned_and_generic_resources(self):
+        summary = """## Summary
+Useful episode.
+
+## Tools & Resources
+- Timeline
+- Shopify
+- Not Mentioned
+
+## Action Items
+- [ ] Try Shopify
+"""
+        result = metrics.validate_tools_and_resources(
+            summary, "The guest recommends Shopify for the store."
+        )
+        assert "- Shopify" in result
+        assert "- Timeline" not in result
+        assert "- Not Mentioned" not in result
+
+    def test_preserves_named_resources_with_descriptions_and_links(self):
+        summary = """## Tools & Resources
+- Shopify — ecommerce platform
+- [Dealonomy](https://dealonomy.com) — acquisition platform
+- Timeline — episode structure
+"""
+        result = metrics.validate_tools_and_resources(
+            summary, "They use Shopify and recommend Dealonomy for acquisitions."
+        )
+        assert "Shopify" in result
+        assert "Dealonomy" in result
+        assert "Timeline" not in result
+
+    def test_rejects_generic_resource_even_when_description_is_quoted(self):
+        summary = "## Tools & Resources\n- Timeline — episode structure\n"
+        result = metrics.validate_tools_and_resources(
+            summary, "The episode discussed Timeline — episode structure."
+        )
+        assert "- Timeline" not in result
+
 
 class TestParseDuration:
     def test_hms(self):
