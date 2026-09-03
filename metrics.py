@@ -76,18 +76,22 @@ def extract_sections(markdown_text, section_headings=None):
 def _resource_name(item):
     """Extract the likely named resource from a rendered bullet."""
     item = re.sub(r"[*_`]", "", item).strip()
+    link = re.match(r"\[([^]]+)\]\([^)]*\)", item)
+    if link:
+        item = link.group(1)
+    item = re.split(r"\s+[—–-]\s+", item, maxsplit=1)[0]
     return re.split(r"\s*[:(]\s*", item, maxsplit=1)[0].strip()
 
 
 def _resource_is_mentioned(item, transcript):
     """Return whether a resource bullet has textual evidence in the transcript."""
+    name = _resource_name(item)
+    if name.casefold() in GENERIC_RESOURCE_NAMES:
+        return False
     item_lower = item.casefold()
     transcript_lower = transcript.casefold()
     if item_lower in transcript_lower:
         return True
-    name = _resource_name(item)
-    if name.casefold() in GENERIC_RESOURCE_NAMES:
-        return False
     if name.casefold() in transcript_lower:
         return True
     if ":" in item:
