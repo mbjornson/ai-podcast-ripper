@@ -303,9 +303,10 @@ def summarize(transcript, episode_title, podcast_name, model, summary_config,
         prompt = build_prompt(summary_config, podcast_name, episode_title, source,
                               max_chars=0)
         log.info("Prompt %d chars -> single-pass summary", len(prompt))
-        return _generate(prompt, model, provider, base_url, api_key, num_predict,
-                         max_context, timeout=request_timeout,
-                         request_label="single-pass summary")
+        result = _generate(prompt, model, provider, base_url, api_key, num_predict,
+                           max_context, timeout=request_timeout,
+                           request_label="single-pass summary")
+        return metrics_mod.validate_tools_and_resources(result, source)
 
     chunks = chunk_transcript(source, chunk_chars, chunk_overlap)
     log.info("Long transcript: summarizing %d chunks", len(chunks))
@@ -326,9 +327,10 @@ def summarize(transcript, episode_title, podcast_name, model, summary_config,
     prompt = build_prompt(summary_config, podcast_name, episode_title,
                           synthesis_input, max_chars=0)
     log.info("Synthesizing %d chunk notes (%d chars)", len(notes), len(prompt))
-    return _generate(prompt, model, provider, base_url, api_key, num_predict,
-                     max_context, timeout=request_timeout,
-                     request_label="chunk synthesis")
+    result = _generate(prompt, model, provider, base_url, api_key, num_predict,
+                       max_context, timeout=request_timeout,
+                       request_label="chunk synthesis")
+    return metrics_mod.validate_tools_and_resources(result, source)
 
 
 def parse_episode_date(published):
