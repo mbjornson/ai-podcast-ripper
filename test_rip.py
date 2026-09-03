@@ -124,6 +124,17 @@ class TestBuildPrompt:
         assert "x" * 500 in prompt
         assert "x" * 501 not in prompt
 
+    def test_tools_resources_prompt_requires_named_actionable_resources(self):
+        config = {
+            "sections": [
+                {"heading": "Tools & Resources", "instruction": "List resources", "format": "bullets"},
+            ],
+        }
+        prompt = rip.build_prompt(config, "Pod", "Ep", "transcript")
+        assert "only named resources explicitly mentioned in the transcript" in prompt
+        assert "Do not include generic concepts, labels, or incidental nouns" in prompt
+        assert "If none are mentioned, write '- None identified.'" in prompt
+
     def test_transcript_under_budget_passes_through_whole(self):
         # 47k is the median transcript; the old 12000 literal cut it to a quarter.
         transcript = "y" * 47000

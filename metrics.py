@@ -270,6 +270,12 @@ def build_summary_prompt(summary_config, podcast_name, episode_title, transcript
         heading = s["heading"]
         instruction = s["instruction"]
         fmt = s.get("format", "prose")
+        if heading == "Tools & Resources":
+            instruction += (
+                "\nInclude only named resources explicitly mentioned in the transcript. "
+                "Do not include generic concepts, labels, or incidental nouns. "
+                "If none are mentioned, write '- None identified.'"
+            )
         if fmt == "bullets":
             section_lines.append(f"## {heading}\n- [{instruction}]")
         elif fmt == "checklist":
