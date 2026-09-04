@@ -148,7 +148,7 @@ All settings live in `config.yaml`:
 | `ollama_model` | `gemma3` | Ollama fallback model |
 | `summary_chunk_chars` | `60000` | Chunk size for long-transcript summarization |
 | `summary_chunk_overlap_chars` | `1000` | Overlap between long-transcript chunks |
-| `summary_chunk_num_predict` | `4096` | Output budget for each long-transcript chunk |
+| `summary_chunk_num_predict` | `3072` | Output budget for each long-transcript chunk |
 | `max_episodes_per_feed` | `3` | Max new episodes to process per feed per run |
 | `backfill_episodes` | `3` | Older episodes to grab when no new ones exist |
 | `keep_audio` | `false` | Keep downloaded audio files after transcription |
