@@ -329,6 +329,7 @@ def summarize(transcript, episode_title, podcast_name, model, summary_config,
     log.info("Synthesizing %d chunk notes (%d chars)", len(notes), len(prompt))
     result = _generate(prompt, model, provider, base_url, api_key, num_predict,
                        max_context, timeout=request_timeout,
+                       chat_template_kwargs={"enable_thinking": False},
                        request_label="chunk synthesis")
     return metrics_mod.validate_tools_and_resources(result, source)
 

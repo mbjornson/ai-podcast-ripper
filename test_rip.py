@@ -943,6 +943,7 @@ class TestSummarizeWiring:
         assert "chunk notes" in calls[-1]
         assert budgets[:-1] == [4096] * (len(budgets) - 1)
         assert template_kwargs[:-1] == [{"enable_thinking": False}] * (len(template_kwargs) - 1)
+        assert template_kwargs[-1] == {"enable_thinking": False}
 
     def test_summary_filters_resource_output_against_transcript(self):
         generated = "## Tools & Resources\n- Timeline\n- Shopify\n"
