@@ -838,6 +838,9 @@ class TestMainNotifyWiring:
 
 
 class TestSummarizeWiring:
+    def test_long_summary_chunk_budget_defaults_to_3072(self):
+        assert rip.SUMMARY_CHUNK_NUM_PREDICT == 3072
+
     def test_generate_forwards_timeout_and_logs_request_label(self, caplog):  # pylint: disable=protected-access
         caplog.set_level(logging.INFO, logger="podcast-ripper")
         captured = {}
@@ -941,7 +944,7 @@ class TestSummarizeWiring:
         assert result == "final summary"
         assert len(calls) > 3
         assert "chunk notes" in calls[-1]
-        assert budgets[:-1] == [4096] * (len(budgets) - 1)
+        assert budgets[:-1] == [rip.SUMMARY_CHUNK_NUM_PREDICT] * (len(budgets) - 1)
         assert template_kwargs[:-1] == [{"enable_thinking": False}] * (len(template_kwargs) - 1)
         assert template_kwargs[-1] == {"enable_thinking": False}
 

@@ -22,7 +22,7 @@ settings:
   # Long transcripts are summarized in chunks before final synthesis.
   summary_chunk_chars: 60000
   summary_chunk_overlap_chars: 1000
-  summary_chunk_num_predict: 4096
+  summary_chunk_num_predict: 3072
   backfill_episodes: 3
   keep_audio: false
 
