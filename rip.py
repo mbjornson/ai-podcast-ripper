@@ -221,17 +221,44 @@ def get_audio_duration(wav_path):
 _WHISPER_MODEL = {}
 
 
-def transcribe(audio_path, model_name):
+def _transcribe_cpu(audio_path, model_name):
+    """Transcribe with faster-whisper on CPU (int8). Slow, but never off."""
     if model_name not in _WHISPER_MODEL:
         log.info("Loading Faster Whisper model: %s (first run downloads ~3GB)", model_name)
         _WHISPER_MODEL[model_name] = WhisperModel(model_name, device="cpu", compute_type="int8")
     model = _WHISPER_MODEL[model_name]
-    log.info("Transcribing: %s (model: %s)", audio_path.name, model_name)
+    log.info("Transcribing on CPU: %s (model: %s)", audio_path.name, model_name)
     segments, _info = model.transcribe(str(audio_path), beam_size=5)
-    text = " ".join(seg.text.strip() for seg in segments)
+    return " ".join(seg.text.strip() for seg in segments)
+
+
+def transcribe(audio_path, settings):
+    """Transcribe an episode. Returns (text, engine); text is None on failure.
+
+    oMLX runs Whisper on the GPU and is the default. It is a network call to a
+    local daemon, so any failure drops through to the in-process CPU engine
+    rather than losing the episode.
+    """
+    if settings.get("transcribe_provider", "omlx") == "omlx":
+        model_name = settings.get("omlx_whisper_model")
+        log.info("Transcribing on GPU via oMLX: %s (model: %s)", audio_path.name, model_name)
+        text = metrics_mod.omlx_transcribe(
+            audio_path,
+            model_name,
+            base_url=settings.get("omlx_base_url", metrics_mod.OMLX_BASE_URL),
+            api_key=settings.get("omlx_api_key"),
+            timeout=settings.get("transcribe_timeout",
+                                 metrics_mod.DEFAULT_TRANSCRIBE_TIMEOUT),
+        )
+        if text:
+            return text, "omlx"
+        log.warning("oMLX transcription unavailable; falling back to CPU faster-whisper")
+
+    text = _transcribe_cpu(audio_path, settings["whisper_model"])
     if not text:
         log.error("Transcription produced no output for: %s", audio_path.name)
-    return text or None
+        return None, "faster_whisper"
+    return text, "faster_whisper"
 
 
 # Re-exported from metrics_mod so existing tests + callers keep their import surface.
@@ -464,7 +491,8 @@ def generate_digest(processed_episodes, digest_config, target_date=None):
 
 
 def record_episode_metrics(output_path, feed_name, podcast_slug, settings,
-                            transcribed_seconds, summarized_seconds):
+                            transcribed_seconds, summarized_seconds,
+                            transcribe_engine=None):
     """Compute heuristics + optional LLM judge, append row to metrics.jsonl."""
     metrics_cfg = settings.get("_metrics_config", {}) or {}
     if not metrics_cfg.get("enabled", False):
@@ -493,6 +521,7 @@ def record_episode_metrics(output_path, feed_name, podcast_slug, settings,
         judge_result=judge_result,
         transcribed_seconds=transcribed_seconds,
         summarized_seconds=summarized_seconds,
+        transcribe_engine=transcribe_engine,
     )
     metrics_mod.append_metrics_row(METRICS_PATH, row)
 
@@ -508,6 +537,7 @@ def process_episode(episode, feed_name, settings):
         duration = "unknown"
         transcribed_seconds = None
         summarized_seconds = None
+        transcribe_engine = None
 
         if episode.get("transcript_url"):
             transcript = fetch_transcript(episode["transcript_url"], episode.get("transcript_type", ""))
@@ -518,7 +548,7 @@ def process_episode(episode, feed_name, settings):
             download_audio(episode["audio_url"], audio_path)
             duration = get_audio_duration(audio_path)
             t0 = time.monotonic()
-            transcript = transcribe(audio_path, settings["whisper_model"])
+            transcript, transcribe_engine = transcribe(audio_path, settings)
             transcribed_seconds = round(time.monotonic() - t0, 1)
 
         if not transcript:
@@ -562,6 +592,7 @@ def process_episode(episode, feed_name, settings):
         record_episode_metrics(
             output_path, feed_name, podcast_slug, settings,
             transcribed_seconds, summarized_seconds,
+            transcribe_engine=transcribe_engine,
         )
         completed = True
         return output_path

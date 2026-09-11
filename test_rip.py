@@ -324,7 +324,7 @@ class TestProcessEpisode:
     @patch("rip.fetch_transcript", return_value=None)
     @patch("rip.download_audio")
     @patch("rip.get_audio_duration", return_value="30:00")
-    @patch("rip.transcribe", return_value="Whisper transcript")
+    @patch("rip.transcribe", return_value=("Whisper transcript", "omlx"))
     @patch("rip.summarize", return_value="## Summary\nTest")
     @patch("rip.write_markdown")
     def test_falls_back_to_audio(self, mock_write, mock_summarize, mock_transcribe,
@@ -357,7 +357,7 @@ class TestProcessEpisode:
     @patch("rip.fetch_transcript", return_value=None)
     @patch("rip.download_audio")
     @patch("rip.get_audio_duration", return_value="10:00")
-    @patch("rip.transcribe", return_value=None)
+    @patch("rip.transcribe", return_value=(None, "omlx"))
     def test_returns_false_when_no_transcript(self, mock_transcribe, mock_duration,
                                               mock_download, mock_fetch):
         episode = {
@@ -995,7 +995,7 @@ class TestProcessEpisodeSummaryFailure:  # pylint: disable=too-few-public-method
                     "_summary_config": {}}
         with patch("rip.download_audio", fake_download), \
              patch("rip.get_audio_duration", return_value="30:00"), \
-             patch("rip.transcribe", return_value="transcript"), \
+             patch("rip.transcribe", return_value=("transcript", "omlx")), \
              patch("rip.summarize", return_value=None), \
              patch("rip.write_markdown") as write_markdown, \
              patch("rip.record_episode_metrics") as record_metrics:
@@ -1063,3 +1063,128 @@ class TestProcessEpisodeReadsNumPredict:
              patch("rip.write_markdown"), patch("rip.record_episode_metrics"):
             rip.process_episode(ep, "Feed", settings)
         return captured
+
+
+class TestTranscribeDispatch:
+    SETTINGS = {
+        "transcribe_provider": "omlx",
+        "omlx_whisper_model": "whisper-large-v3-turbo",
+        "omlx_base_url": "http://omlx/v1",
+        "omlx_api_key": "localpassword",
+        "transcribe_timeout": 900,
+        "whisper_model": "large-v3-turbo",
+    }
+
+    def setup_method(self):
+        rip._WHISPER_MODEL.clear()  # pylint: disable=protected-access
+
+    def _cpu_model(self, text="cpu transcript"):
+        segment = MagicMock()
+        segment.text = text
+        model = MagicMock()
+        model.transcribe.return_value = ([segment], None)
+        return model
+
+    def test_uses_omlx_when_provider_is_omlx(self, tmp_path):
+        audio = tmp_path / "ep.mp3"
+        audio.write_bytes(b"x")
+        with patch("rip.metrics_mod.omlx_transcribe", return_value="gpu transcript"):
+            with patch("rip.WhisperModel") as cpu:
+                text, engine = rip.transcribe(audio, self.SETTINGS)
+        assert text == "gpu transcript"
+        assert engine == "omlx"
+        cpu.assert_not_called()
+
+    def test_forwards_omlx_settings(self, tmp_path):
+        audio = tmp_path / "ep.mp3"
+        audio.write_bytes(b"x")
+        with patch("rip.metrics_mod.omlx_transcribe", return_value="ok") as omlx:
+            rip.transcribe(audio, self.SETTINGS)
+        _args, kwargs = omlx.call_args
+        assert omlx.call_args[0][1] == "whisper-large-v3-turbo"
+        assert kwargs["base_url"] == "http://omlx/v1"
+        assert kwargs["api_key"] == "localpassword"
+        assert kwargs["timeout"] == 900
+
+    def test_falls_back_to_cpu_when_omlx_fails(self, tmp_path):
+        audio = tmp_path / "ep.mp3"
+        audio.write_bytes(b"x")
+        with patch("rip.metrics_mod.omlx_transcribe", return_value=None):
+            with patch("rip.WhisperModel", return_value=self._cpu_model()) as cpu:
+                text, engine = rip.transcribe(audio, self.SETTINGS)
+        assert text == "cpu transcript"
+        assert engine == "faster_whisper"
+        cpu.assert_called_once()
+
+    def test_uses_cpu_directly_when_provider_is_faster_whisper(self, tmp_path):
+        audio = tmp_path / "ep.mp3"
+        audio.write_bytes(b"x")
+        settings = dict(self.SETTINGS, transcribe_provider="faster_whisper")
+        with patch("rip.metrics_mod.omlx_transcribe") as omlx:
+            with patch("rip.WhisperModel", return_value=self._cpu_model()):
+                text, engine = rip.transcribe(audio, settings)
+        assert text == "cpu transcript"
+        assert engine == "faster_whisper"
+        omlx.assert_not_called()
+
+    def test_returns_none_when_both_engines_fail(self, tmp_path):
+        audio = tmp_path / "ep.mp3"
+        audio.write_bytes(b"x")
+        with patch("rip.metrics_mod.omlx_transcribe", return_value=None):
+            with patch("rip.WhisperModel", return_value=self._cpu_model(text="")):
+                text, _engine = rip.transcribe(audio, self.SETTINGS)
+        assert text is None
+
+    def test_reuses_cached_cpu_model_across_calls(self, tmp_path):
+        audio = tmp_path / "ep.mp3"
+        audio.write_bytes(b"x")
+        settings = dict(self.SETTINGS, transcribe_provider="faster_whisper")
+        with patch("rip.WhisperModel", return_value=self._cpu_model()) as cpu:
+            rip.transcribe(audio, settings)
+            rip.transcribe(audio, settings)
+        cpu.assert_called_once()
+
+
+class TestTranscribeEngineWiring:
+    EPISODE = {
+        "title": "Ep Needing Audio",
+        "audio_url": "http://example.com/ep.mp3",
+        "published": "Mon, 18 May 2026 00:00:00 GMT",
+        "link": "http://example.com/ep",
+        "guid": "guid-engine",
+    }
+    SETTINGS = {
+        "whisper_model": "large-v3-turbo",
+        "transcribe_provider": "omlx",
+        "omlx_whisper_model": "whisper-large-v3-turbo",
+        "llm_provider": "omlx",
+        "omlx_model": "gemma",
+        "_summary_config": {},
+    }
+
+    @patch("rip.fetch_transcript", return_value=None)
+    @patch("rip.download_audio")
+    @patch("rip.get_audio_duration", return_value="30:00")
+    @patch("rip.summarize", return_value="## Summary\nTest")
+    @patch("rip.write_markdown")
+    @patch("rip.record_episode_metrics")
+    def _run(self, engine, mock_record, mock_write, mock_summarize,
+             mock_duration, mock_download, mock_fetch, tmp_path=None,
+             monkeypatch=None):
+        monkeypatch.setattr(rip, "TRANSCRIPTS_DIR", tmp_path / "transcripts")
+        monkeypatch.setattr(rip, "RAW_DIR", tmp_path / "raw")
+        with patch("rip.transcribe", return_value=("text", engine)) as mock_transcribe:
+            rip.process_episode(self.EPISODE, "Test Pod", self.SETTINGS)
+        return mock_transcribe, mock_record
+
+    def test_passes_settings_dict_to_transcribe(self, tmp_path, monkeypatch):
+        # pylint: disable=no-value-for-parameter
+        mock_transcribe, _record = self._run("omlx", tmp_path=tmp_path,
+                                             monkeypatch=monkeypatch)
+        assert mock_transcribe.call_args[0][1] is self.SETTINGS
+
+    def test_records_engine_used(self, tmp_path, monkeypatch):
+        # pylint: disable=no-value-for-parameter
+        _transcribe, mock_record = self._run("faster_whisper", tmp_path=tmp_path,
+                                             monkeypatch=monkeypatch)
+        assert mock_record.call_args.kwargs["transcribe_engine"] == "faster_whisper"

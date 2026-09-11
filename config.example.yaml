@@ -5,7 +5,10 @@ feeds:
   #   url: "https://example.com/feed.xml"
 
 settings:
-  whisper_model: "medium"
+  whisper_model: "medium" # CPU fallback model, used when transcribe_provider is "faster_whisper" or oMLX is unreachable
+  transcribe_provider: "omlx"
+  omlx_whisper_model: "whisper-large-v3-turbo" # Must be pulled into oMLX first (Models tab or /admin/api/hf/download)
+  transcribe_timeout: 1800 # Seconds; long episodes take a while even on GPU
   llm_provider: "omlx"
   ollama_model: "gemma3" # Used when llm_provider is "ollama"
   omlx_model: "gemma-4-12b-coder-fable5-composer2.5-4bit"
