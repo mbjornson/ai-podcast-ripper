@@ -430,3 +430,93 @@ class TestConfiguredModel:
     def test_rejects_missing_model_for_selected_provider(self):
         with pytest.raises(ValueError, match="omlx_model"):
             metrics.configured_model({"llm_provider": "omlx"})
+
+
+class TestOmlxTranscribe:
+    def _capture(self, tmp_path, response=None, fail=None, **kwargs):
+        captured = {}
+        audio = tmp_path / "episode.mp3"
+        audio.write_bytes(b"ID3\x00audio-bytes")
+
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps(response or {"text": "hello world"}).encode()
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["headers"] = dict(req.headers)
+            captured["body"] = req.data
+            captured["timeout"] = timeout
+            if fail:
+                raise fail
+            return FakeResp()
+
+        with patch("metrics.urllib.request.urlopen", fake_urlopen):
+            result = metrics.omlx_transcribe(audio, "whisper-large-v3-turbo", **kwargs)
+        return result, captured
+
+    def test_posts_multipart_form_to_transcriptions_endpoint(self, tmp_path):
+        _result, captured = self._capture(tmp_path, base_url="http://omlx/v1")
+        assert captured["url"] == "http://omlx/v1/audio/transcriptions"
+        content_type = captured["headers"]["Content-type"]
+        assert content_type.startswith("multipart/form-data; boundary=")
+
+    def test_sends_model_and_audio_bytes_in_body(self, tmp_path):
+        _result, captured = self._capture(tmp_path)
+        body = captured["body"]
+        assert b'name="model"' in body
+        assert b"whisper-large-v3-turbo" in body
+        assert b'name="file"' in body
+        assert b'filename="episode.mp3"' in body
+        assert b"ID3\x00audio-bytes" in body
+
+    def test_sends_bearer_token_when_api_key_given(self, tmp_path):
+        _result, captured = self._capture(tmp_path, api_key="localpassword")
+        assert captured["headers"]["Authorization"] == "Bearer localpassword"
+
+    def test_returns_transcription_text(self, tmp_path):
+        result, _captured = self._capture(tmp_path)
+        assert result == "hello world"
+
+    def test_passes_timeout_to_request(self, tmp_path):
+        _result, captured = self._capture(tmp_path, timeout=900)
+        assert captured["timeout"] == 900
+
+    def test_returns_none_when_request_fails(self, tmp_path):
+        result, _captured = self._capture(tmp_path, fail=OSError("connection refused"))
+        assert result is None
+
+    def test_returns_none_when_response_has_no_text(self, tmp_path):
+        result, _captured = self._capture(tmp_path, response={"text": ""})
+        assert result is None
+
+
+class TestMetricsRowTranscribeEngine:
+    def _parsed(self, tmp_path):
+        md_path = tmp_path / "ep.md"
+        md_path.write_text(FIXTURE_MD, encoding="utf-8")
+        return metrics.parse_episode(md_path)
+
+    def test_records_engine_that_produced_the_transcript(self, tmp_path):
+        parsed = self._parsed(tmp_path)
+        row = metrics.build_metrics_row(
+            parsed, rel_path="transcripts/test/ep.md", podcast_slug="test",
+            fallback_podcast_name="Test Pod", judge_result=None,
+            transcribed_seconds=12.0, summarized_seconds=3.0,
+            transcribe_engine="omlx",
+        )
+        assert row["transcribe_engine"] == "omlx"
+
+    def test_defaults_engine_to_none_for_callers_that_omit_it(self, tmp_path):
+        parsed = self._parsed(tmp_path)
+        row = metrics.build_metrics_row(
+            parsed, rel_path="transcripts/test/ep.md", podcast_slug="test",
+            fallback_podcast_name="Test Pod", judge_result=None,
+        )
+        assert row["transcribe_engine"] is None

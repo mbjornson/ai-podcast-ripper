@@ -1,6 +1,6 @@
 # Podcast Ripper
 
-Local podcast transcription and summarization pipeline. Fetches new episodes from RSS feeds, transcribes with Faster Whisper, summarizes with a local LLM via oMLX or Ollama, and outputs structured markdown.
+Local podcast transcription and summarization pipeline. Fetches new episodes from RSS feeds, transcribes via oMLX (GPU) or Faster Whisper (CPU), summarizes with a local LLM via oMLX or Ollama, and outputs structured markdown.
 
 Everything runs locally — no external APIs.
 
@@ -31,25 +31,66 @@ brew install ffmpeg
 pip3 install -r requirements.txt
 ```
 
-Transcription uses [Faster Whisper](https://github.com/SYSTRAN/faster-whisper),
-which downloads its model automatically on the first run (the `large-v3-turbo`
-default is ~1.6 GB). Set `whisper_model` in `config.yaml` to a smaller model
-such as `medium` for faster but less accurate transcription.
+`faster-whisper` is always installed as the CPU fallback for transcription
+(see below), even if you plan to run everything else through oMLX.
 
-### 2. Prepare the summarization model
+### 2. Prepare the models
 
-The default configuration uses the oMLX model
-`gemma-4-12b-coder-fable5-composer2.5-4bit`. Start oMLX and ensure that model
-is installed. To use Ollama instead, set `llm_provider: "ollama"` and pull the
-configured Ollama model:
+There are two independent model choices — transcription and summarization —
+each with its own provider setting. Mix and match freely; neither depends on
+the other.
 
-```bash
-ollama pull gemma3
+**Transcription** (`transcribe_provider`, default `"omlx"`):
+
+- **oMLX (default, GPU)** — runs Whisper through oMLX's `/v1/audio/transcriptions`
+  endpoint. In the oMLX admin UI (`/admin` → Models, or the HF search tab),
+  pull a Whisper model such as `mlx-community/whisper-large-v3-turbo` and set
+  `omlx_whisper_model` in `config.yaml` to match. If oMLX is unreachable or
+  the model isn't loaded, the pipeline automatically falls back to the CPU
+  engine below and logs a warning — no episode is lost, it's just slower.
+- **Faster Whisper (CPU fallback)** — set `transcribe_provider: "faster_whisper"`
+  to use this as the primary engine instead of a fallback (e.g. no GPU
+  available, or oMLX reserved for the LLM). Uses
+  [Faster Whisper](https://github.com/SYSTRAN/faster-whisper), which downloads
+  its model automatically on first run (the `large-v3-turbo` default is
+  ~1.6 GB). Set `whisper_model` to a smaller model such as `medium` for
+  faster but less accurate transcription.
+
+**Summarization** (`llm_provider`, default `"omlx"`):
+
+- **oMLX (default)** — start oMLX and make sure the model in `omlx_model`
+  (default `gemma-4-12b-coder-fable5-composer2.5-4bit`) is installed.
+- **Ollama** — set `llm_provider: "ollama"` and pull the configured model:
+
+  ```bash
+  ollama pull gemma3
+  ```
+
+  Make sure Ollama is running (`ollama serve` or the Ollama desktop app).
+  Ollama has no transcription API in this pipeline — pick it for
+  summarization only; transcription still runs through oMLX or Faster
+  Whisper as above.
+
+For example, a fully local Ollama setup with no oMLX at all:
+
+```yaml
+settings:
+  transcribe_provider: "faster_whisper"
+  whisper_model: "medium"
+  llm_provider: "ollama"
+  ollama_model: "gemma3"
 ```
 
-For the default provider, make sure oMLX is running and the configured model is
-available. If using Ollama, make sure Ollama is running (`ollama serve` or the
-Ollama desktop app).
+Or a mixed setup — oMLX for GPU transcription, Ollama for summarization:
+
+```yaml
+settings:
+  transcribe_provider: "omlx"
+  omlx_whisper_model: "whisper-large-v3-turbo"
+  omlx_base_url: "http://127.0.0.1:10000/v1"
+  llm_provider: "ollama"
+  ollama_model: "gemma3"
+```
 
 ### 3. Add your podcasts
 
@@ -140,12 +181,15 @@ All settings live in `config.yaml`:
 
 | Setting | Default | Description |
 |---|---|---|
-| `whisper_model` | `medium` | Whisper model size (`base`, `medium`, `large-v3`) |
+| `transcribe_provider` | `omlx` | Transcription engine (`omlx` GPU, or `faster_whisper` CPU) |
+| `omlx_whisper_model` | `whisper-large-v3-turbo` | oMLX model for transcription (must be pulled into oMLX first) |
+| `transcribe_timeout` | `1800` | Seconds to wait for an oMLX transcription request |
+| `whisper_model` | `medium` | Faster Whisper model size (`base`, `medium`, `large-v3`) — CPU fallback, or primary when `transcribe_provider` is `faster_whisper` |
 | `llm_provider` | `omlx` | Text model provider (`omlx` or `ollama`) |
 | `omlx_model` | Gemma 4 12B | oMLX model for summarization and judging |
-| `omlx_base_url` | `http://127.0.0.1:10000/v1` | oMLX OpenAI-compatible API base URL |
+| `omlx_base_url` | `http://127.0.0.1:10000/v1` | oMLX OpenAI-compatible API base URL (used for both transcription and summarization) |
 | `omlx_api_key` | — | Optional oMLX API key |
-| `ollama_model` | `gemma3` | Ollama fallback model |
+| `ollama_model` | `gemma3` | Ollama model for summarization, used when `llm_provider` is `ollama` |
 | `summary_chunk_chars` | `60000` | Chunk size for long-transcript summarization |
 | `summary_chunk_overlap_chars` | `1000` | Overlap between long-transcript chunks |
 | `summary_chunk_num_predict` | `3072` | Output budget for each long-transcript chunk |

@@ -8,13 +8,14 @@ import logging
 import math
 import re
 import urllib.request
+import uuid
 from pathlib import Path
 
 import yaml
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OMLX_BASE_URL = "http://127.0.0.1:10000/v1"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 BASE_DIR = Path(__file__).parent
 
 log = logging.getLogger("metrics")
@@ -412,6 +413,55 @@ def omlx_generate(model, prompt, num_predict=2048, temperature=0.3,
         return None
 
 
+DEFAULT_TRANSCRIBE_TIMEOUT = 1800
+
+
+def omlx_transcribe(audio_path, model, base_url=OMLX_BASE_URL, api_key=None,
+                    timeout=DEFAULT_TRANSCRIBE_TIMEOUT, language=None):
+    """POST audio to oMLX's OpenAI-compatible transcription endpoint (GPU).
+
+    Returns the transcript text, or None on failure so callers can fall back.
+    """
+    boundary = uuid.uuid4().hex
+    fields = {"model": model}
+    if language:
+        fields["language"] = language
+
+    body = bytearray()
+    for name, value in fields.items():
+        body += (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+            f"{value}\r\n"
+        ).encode()
+    body += (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{audio_path.name}"\r\n'
+        f"Content-Type: application/octet-stream\r\n\r\n"
+    ).encode()
+    # Whole file in memory: a 4h episode is ~200MB, and urllib needs a bytes body.
+    body += Path(audio_path).read_bytes()
+    body += f"\r\n--{boundary}--\r\n".encode()
+
+    headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    url = base_url.rstrip("/") + "/audio/transcriptions"
+    req = urllib.request.Request(
+        url, data=bytes(body), headers=headers, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            text = (json.loads(resp.read()).get("text") or "").strip()
+    except Exception as e:
+        log.warning("oMLX transcription failed (%s): %s", model, e)
+        return None
+    if not text:
+        log.warning("oMLX transcription returned empty text (%s)", model)
+        return None
+    return text
+
+
 def generate_text(model, prompt, provider="ollama", **kwargs):
     """Generate text through the configured local model provider."""
     if provider == "omlx":
@@ -458,7 +508,8 @@ def parse_judge_response(raw):
 
 
 def build_metrics_row(parsed, rel_path, podcast_slug, fallback_podcast_name,
-                       judge_result, transcribed_seconds=None, summarized_seconds=None):
+                       judge_result, transcribed_seconds=None, summarized_seconds=None,
+                       transcribe_engine=None):
     """Assemble a metrics.jsonl row from parsed episode + optional judge + timing."""
     h = compute_heuristics(parsed)
     fm = parsed["frontmatter"]
@@ -479,6 +530,7 @@ def build_metrics_row(parsed, rel_path, podcast_slug, fallback_podcast_name,
         "low_signal_flag": h["low_signal_flag"],
         "signal_density": h["signal_density"],
         "transcribed_seconds": transcribed_seconds,
+        "transcribe_engine": transcribe_engine,
         "summarized_seconds": summarized_seconds,
         "judge": judge_result,
         "content_hash": content_hash(parsed),
