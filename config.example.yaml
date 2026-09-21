@@ -14,7 +14,14 @@ settings:
   omlx_model: "gemma-4-12b-coder-fable5-composer2.5-4bit"
   omlx_base_url: "http://127.0.0.1:10000/v1"
   omlx_api_key: "" # Set to the key configured in oMLX, if required
+  # Check the authenticated model list before downloading audio. Transient
+  # startup failures retry with these delays; bad credentials/model names stop immediately.
+  omlx_preflight_attempts: 3
+  omlx_preflight_backoff_seconds: [15, 30]
   max_episodes_per_feed: 3
+  # Failed episodes stay retryable until this many failed runs, then are
+  # quarantined. A changed enclosure URL automatically releases them.
+  episode_failure_limit: 3
   # Transcript chars fed to the summarizer. 0 disables the cap.
   max_transcript_chars: 240000
   # Ceiling for the per-episode num_ctx sizing.
@@ -56,7 +63,7 @@ digest:
   output_dir: "digests"
 
 notify:
-  enabled: false  # macOS desktop banner when a full run completes (true/1 to enable; macOS only)
+  enabled: false  # macOS desktop banners for completion and paused runs (true/1 to enable; macOS only)
 
 search:
   transcript_index: true  # build/update the SQLite FTS5 keyword index over raw/ each run
