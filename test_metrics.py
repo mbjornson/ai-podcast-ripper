@@ -1,6 +1,7 @@
 """Tests for metrics.py"""
 
 import json
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 import pytest
@@ -412,6 +413,125 @@ class TestOmlxGenerate:
     def test_returns_empty_string_for_missing_choices(self):
         result, _captured = self._capture(response={"choices": []})
         assert result == ""
+
+
+class TestOmlxModelReady:
+    def test_accepts_configured_model_returned_by_authenticated_models_endpoint(self):
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            @staticmethod
+            def read():
+                return json.dumps({"object": "list", "data": [{"id": "gemma"}]}).encode()
+
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["headers"] = dict(req.headers)
+            captured["timeout"] = timeout
+            return FakeResp()
+
+        with patch("metrics.urllib.request.urlopen", fake_urlopen):
+            ready, reason = metrics.omlx_model_ready(
+                "gemma", "http://omlx/v1", "secret", attempts=1,
+            )
+
+        assert ready is True
+        assert reason is None
+        assert captured == {
+            "url": "http://omlx/v1/models",
+            "headers": {"Authorization": "Bearer secret"},
+            "timeout": 10,
+        }
+
+    def test_retries_transient_connection_failure_before_declaring_model_unavailable(self):
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            @staticmethod
+            def read():
+                return json.dumps({"object": "list", "data": [{"id": "gemma"}]}).encode()
+
+        responses = [OSError("connection refused"), FakeResp()]
+        sleeps = []
+
+        def fake_urlopen(_req, timeout=None):
+            result = responses.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        with patch("metrics.urllib.request.urlopen", fake_urlopen):
+            ready, reason = metrics.omlx_model_ready(
+                "gemma", "http://omlx/v1", None, attempts=3,
+                backoff_seconds=(7, 11), sleep=sleeps.append,
+            )
+
+        assert ready is True
+        assert reason is None
+        assert sleeps == [7]
+
+    def test_rejects_a_server_that_does_not_advertise_the_configured_model(self):
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            @staticmethod
+            def read():
+                return json.dumps({"object": "list", "data": [{"id": "other-model"}]}).encode()
+
+        with patch("metrics.urllib.request.urlopen", return_value=FakeResp()):
+            ready, reason = metrics.omlx_model_ready(
+                "gemma", "http://omlx/v1", None, attempts=3,
+            )
+
+        assert ready is False
+        assert reason == "configured model 'gemma' is not available"
+
+    def test_does_not_retry_an_authentication_failure(self):
+        sleeps = []
+
+        def fake_urlopen(req, timeout=None):
+            raise HTTPError(req.full_url, 401, "Unauthorized", hdrs=None, fp=None)
+
+        with patch("metrics.urllib.request.urlopen", fake_urlopen):
+            ready, reason = metrics.omlx_model_ready(
+                "gemma", "http://omlx/v1", "bad-key", attempts=3,
+                backoff_seconds=(7, 11), sleep=sleeps.append,
+            )
+
+        assert ready is False
+        assert reason == "oMLX authentication failed (HTTP 401)"
+        assert not sleeps
+
+    def test_uses_a_default_delay_when_config_supplies_no_backoff_delays(self):
+        attempts = []
+
+        def fake_urlopen(_req, timeout=None):
+            attempts.append(timeout)
+            raise OSError("connection refused")
+
+        with patch("metrics.urllib.request.urlopen", fake_urlopen):
+            ready, reason = metrics.omlx_model_ready(
+                "gemma", "http://omlx/v1", None, attempts=2,
+                backoff_seconds=(), sleep=lambda _delay: None,
+            )
+
+        assert ready is False
+        assert "connection refused" in reason
+        assert len(attempts) == 2
 
 
 class TestConfiguredModel:

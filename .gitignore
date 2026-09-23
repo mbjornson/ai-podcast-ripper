@@ -2,6 +2,7 @@ tmp/
 transcripts/
 raw/
 state.json
+recovery-state.json
 config.yaml
 /com.shapeandship.podcast-ripper.plist
 metrics.jsonl

@@ -130,6 +130,20 @@ Long transcripts are summarized in bounded overlapping chunks and then synthesiz
 into the same sections. If summarization fails, the episode remains retryable and
 downloaded audio is retained for the next run.
 
+### Recovery behavior
+
+When summarization uses oMLX, each run first checks the authenticated model list.
+Transient server-startup failures retry with bounded backoff; a missing model or bad
+credentials pauses the run before any episode audio is downloaded. A paused run exits
+non-zero, sends a macOS notification when `notify.enabled` is true, and automatically
+tries again at the next scheduled run. While unresolved, it sends an additional daily
+reminder.
+
+Individual episodes remain retryable until `episode_failure_limit` failed runs
+(default: 3). They are then quarantined in `recovery-state.json` instead of retrying
+forever. If a publisher changes that episode's enclosure URL, the quarantine clears
+automatically and it is retried.
+
 ### Raw transcript corpus
 
 The full plain-text transcript of every episode is stored separately under:
@@ -189,12 +203,15 @@ All settings live in `config.yaml`:
 | `omlx_model` | Gemma 4 12B | oMLX model for summarization and judging |
 | `omlx_base_url` | `http://127.0.0.1:10000/v1` | oMLX OpenAI-compatible API base URL (used for both transcription and summarization) |
 | `omlx_api_key` | — | Optional oMLX API key |
+| `omlx_preflight_attempts` | `3` | Bounded oMLX startup attempts before pausing a run |
+| `omlx_preflight_backoff_seconds` | `[15, 30]` | Delays between oMLX startup attempts |
 | `ollama_model` | `gemma3` | Ollama model for summarization, used when `llm_provider` is `ollama` |
 | `summary_chunk_chars` | `60000` | Chunk size for long-transcript summarization |
 | `summary_chunk_overlap_chars` | `1000` | Overlap between long-transcript chunks |
 | `summary_chunk_num_predict` | `3072` | Output budget for each long-transcript chunk |
 | `max_episodes_per_feed` | `3` | Max new episodes to process per feed per run |
 | `backfill_episodes` | `3` | Older episodes to grab when no new ones exist |
+| `episode_failure_limit` | `3` | Failed runs before an episode is quarantined |
 | `keep_audio` | `false` | Keep downloaded audio files after transcription |
 | `digest.enabled` | `false` | Generate a daily digest after each run |
 | `digest.sections` | `[Summary, Key Points, Action Items]` | Which sections to include |

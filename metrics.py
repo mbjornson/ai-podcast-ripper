@@ -7,6 +7,8 @@ import json
 import logging
 import math
 import re
+import time
+import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
@@ -29,6 +31,46 @@ def configured_model(settings):
     if not model:
         raise ValueError(f"Missing required setting: {model_key}")
     return model
+
+
+def omlx_model_ready(model, base_url=OMLX_BASE_URL, api_key=None, attempts=3,
+                     backoff_seconds=(15, 30), sleep=time.sleep, timeout=10):
+    """Return whether oMLX is reachable and advertises ``model``.
+
+    Connection failures can be transient while the local server is starting, so
+    only those failures are retried. A response that does not list the requested
+    model is deterministic for the run and fails immediately.
+    """
+    attempts = max(1, int(attempts))
+    backoff_seconds = tuple(backoff_seconds or ()) or (15,)
+    url = base_url.rstrip("/") + "/models"
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    last_error = None
+    for attempt in range(attempts):
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                payload = json.loads(response.read())
+            model_ids = {item.get("id") for item in payload.get("data", [])}
+            if model in model_ids:
+                return True, None
+            return False, f"configured model '{model}' is not available"
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403):
+                return False, f"oMLX authentication failed (HTTP {exc.code})"
+            if 400 <= exc.code < 500:
+                return False, f"oMLX request failed (HTTP {exc.code})"
+            last_error = exc
+        except Exception as exc:  # urllib exposes connection, timeout, and HTTP errors here.
+            last_error = exc
+        if attempt + 1 < attempts:
+            delay = backoff_seconds[min(attempt, len(backoff_seconds) - 1)]
+            sleep(delay)
+
+    return False, f"oMLX is unavailable: {last_error}"
 
 LOW_SIGNAL_RE = re.compile(
     r"low signal|mostly entertainment|no clear action|limited actionable",

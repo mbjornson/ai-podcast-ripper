@@ -211,6 +211,33 @@ class TestGetNewEpisodes:
         result = rip.get_new_episodes("http://example.com/feed", "Test", state, 3, settings)
         assert result == []
 
+    @patch("rip.feedparser.parse")
+    def test_skips_quarantined_recent_episodes_before_applying_feed_limit(self, mock_parse):
+        def entry(guid):
+            value = MagicMock()
+            value.get = lambda key, default=None: {
+                "id": guid,
+                "title": f"Episode {guid}",
+                "enclosures": [MagicMock(
+                    href=f"https://cdn.example/{guid}.mp3",
+                    **{"get.return_value": "audio/mpeg"},
+                )],
+                "podcast_transcript": None,
+            }.get(key, default)
+            return value
+
+        feed_url = "https://feed.example/rss"
+        mock_parse.return_value = MagicMock(bozo=False, entries=[entry("one"), entry("two"), entry("three")])
+        recovery = {}
+        for guid in ("one", "two"):
+            episode = {"guid": guid, "audio_url": f"https://cdn.example/{guid}.mp3"}
+            for _ in range(3):
+                rip.record_episode_failure(recovery, feed_url, episode, "HTTP Error 404", limit=3)
+
+        episodes = rip.get_new_episodes(feed_url, "Test", {}, 1, recovery=recovery)
+
+        assert [episode["guid"] for episode in episodes] == ["three"]
+
 
 class TestFetchTranscript:
     @patch("rip.urllib.request.urlopen")
@@ -731,6 +758,169 @@ class TestSaveLoadState:
     def test_load_missing_returns_empty(self, tmp_path, monkeypatch):
         monkeypatch.setattr(rip, "STATE_PATH", tmp_path / "missing.json")
         assert rip.load_state() == {}
+
+
+class TestEpisodeFailureRecovery:
+    def test_quarantines_an_episode_after_three_failed_runs(self):
+        recovery = {}
+        episode = {"guid": "episode-1", "audio_url": "https://cdn.example/old.mp3"}
+
+        assert rip.record_episode_failure(recovery, "https://feed.example/rss", episode,
+                                          "HTTP Error 404", limit=3) is False
+        assert rip.record_episode_failure(recovery, "https://feed.example/rss", episode,
+                                          "HTTP Error 404", limit=3) is False
+        assert rip.record_episode_failure(recovery, "https://feed.example/rss", episode,
+                                          "HTTP Error 404", limit=3) is True
+        assert rip.is_episode_quarantined(recovery, "https://feed.example/rss", episode) is True
+
+    def test_new_enclosure_url_releases_a_quarantined_episode_for_retry(self):
+        recovery = {}
+        original = {"guid": "episode-1", "audio_url": "https://cdn.example/old.mp3"}
+        changed = {
+            "guid": "episode-1",
+            "title": "Updated episode",
+            "audio_url": "https://cdn.example/new.mp3",
+        }
+        for _ in range(3):
+            rip.record_episode_failure(recovery, "https://feed.example/rss", original,
+                                       "HTTP Error 404", limit=3)
+
+        assert rip.is_episode_quarantined(recovery, "https://feed.example/rss", changed) is False
+
+    def test_releases_a_changed_enclosure_and_persists_the_recovery_update(self, tmp_path, monkeypatch):
+        recovery_path = tmp_path / "recovery-state.json"
+        monkeypatch.setattr(rip, "RECOVERY_STATE_PATH", recovery_path)
+        original = {"guid": "episode-1", "audio_url": "https://cdn.example/old.mp3"}
+        changed = {
+            "guid": "episode-1",
+            "title": "Updated episode",
+            "audio_url": "https://cdn.example/new.mp3",
+        }
+        recovery = {}
+        for _ in range(3):
+            rip.record_episode_failure(recovery, "https://feed.example/rss", original,
+                                       "HTTP Error 404", limit=3)
+        rip.save_recovery_state(recovery)
+
+        with patch("rip.get_new_episodes", return_value=[changed]), \
+             patch("rip.process_episode", return_value=Path("/tmp/episode.md")):
+            rip.process_feeds(
+                [{"name": "Test", "url": "https://feed.example/rss"}], {}, {}, recovery,
+                on_recovery_change=rip.save_recovery_state,
+            )
+
+        assert rip.load_recovery_state()["episode_failures"] == {}
+
+
+class TestRecoveryState:  # pylint: disable=too-few-public-methods
+    def test_recovers_from_a_corrupt_state_file_without_crashing_future_runs(self, tmp_path, monkeypatch):
+        recovery_path = tmp_path / "recovery-state.json"
+        recovery_path.write_text("{not valid json", encoding="utf-8")
+        monkeypatch.setattr(rip, "RECOVERY_STATE_PATH", recovery_path)
+
+        recovery = rip.load_recovery_state()
+
+        assert recovery == {"episode_failures": {}, "provider_outage": {}}
+        assert not recovery_path.exists()
+        assert list(tmp_path.glob("recovery-state.json.corrupt-*"))
+
+
+class TestProcessFeedsRecovery:
+    def test_skips_a_quarantined_episode_without_processing_it(self):
+        feed_url = "https://feed.example/rss"
+        episode = {
+            "guid": "episode-1",
+            "title": "Unavailable audio",
+            "audio_url": "https://cdn.example/old.mp3",
+        }
+        recovery = {}
+        for _ in range(3):
+            rip.record_episode_failure(recovery, feed_url, episode, "HTTP Error 404", limit=3)
+
+        with patch("rip.get_new_episodes", return_value=[episode]), \
+             patch("rip.process_episode") as mock_process:
+            total = rip.process_feeds(
+                [{"name": "TestPod", "url": feed_url}], {}, {}, recovery,
+            )
+
+        assert total == 0
+        mock_process.assert_not_called()
+
+    def test_persists_a_failed_episode_before_the_rest_of_the_batch_runs(self):
+        feed_url = "https://feed.example/rss"
+        episode = {
+            "guid": "episode-1",
+            "title": "Temporarily unavailable audio",
+            "audio_url": "https://cdn.example/episode.mp3",
+        }
+        persisted = []
+        recovery = {}
+
+        with patch("rip.get_new_episodes", return_value=[episode]), \
+             patch("rip.process_episode", return_value=None):
+            rip.process_feeds(
+                [{"name": "TestPod", "url": feed_url}], {}, {}, recovery,
+                on_recovery_change=lambda value: persisted.append(json.loads(json.dumps(value))),
+            )
+
+        assert persisted[-1]["episode_failures"][f"{feed_url}\nepisode-1"]["count"] == 1
+
+
+class TestProviderOutageRecovery:
+    def test_records_one_daily_reminder_for_an_unresolved_outage(self):
+        recovery = {}
+
+        assert rip.record_provider_outage(recovery, "configured model missing", "2026-09-18") is True
+        assert rip.record_provider_outage(recovery, "configured model missing", "2026-09-18") is False
+        assert rip.record_provider_outage(recovery, "configured model missing", "2026-09-19") is True
+        assert recovery["provider_outage"] == {
+            "active": True,
+            "last_error": "configured model missing",
+            "last_reminder_date": "2026-09-19",
+        }
+
+    def test_preflight_requires_omlx_only_when_it_is_the_summary_provider(self):
+        with patch("rip.metrics_mod.omlx_model_ready", return_value=(False, "server offline")):
+            assert rip.preflight_summarizer({"llm_provider": "ollama"}) == (True, None)
+            assert rip.preflight_summarizer({
+                "llm_provider": "omlx",
+                "omlx_model": "gemma",
+                "omlx_base_url": "http://omlx/v1",
+                "omlx_api_key": "secret",
+            }) == (False, "server offline")
+
+    def test_preflight_converts_missing_model_configuration_into_a_pause_reason(self):
+        ready, reason = rip.preflight_summarizer({"llm_provider": "omlx"})
+
+        assert ready is False
+        assert reason == "oMLX preflight configuration error: Missing required setting: omlx_model"
+
+
+class TestMainProviderPause:  # pylint: disable=too-few-public-methods
+    @patch("rip.notify_complete")
+    @patch("rip.process_feeds")
+    @patch("rip.save_recovery_state")
+    @patch("rip.load_recovery_state", return_value={})
+    @patch("rip.metrics_mod.omlx_model_ready", return_value=(False, "server offline"))
+    @patch("rip.load_config")
+    def test_pauses_before_processing_and_notifies_when_omlx_is_unavailable(
+            self, mock_config, _mock_ready, mock_load_recovery, mock_save_recovery,
+            mock_process, mock_notify):
+        mock_config.return_value = {
+            "feeds": [{"name": "TestPod", "url": "http://example.com/feed"}],
+            "settings": {"llm_provider": "omlx", "omlx_model": "gemma"},
+            "notify": {"enabled": True},
+        }
+
+        assert rip.main([]) == 1
+
+        mock_process.assert_not_called()
+        assert mock_notify.call_count == 2
+        messages = [call.args[0] for call in mock_notify.call_args_list]
+        assert any("Run paused" in message and "server offline" in message for message in messages)
+        assert any("Daily reminder" in message for message in messages)
+        saved = mock_save_recovery.call_args.args[0]
+        assert saved["provider_outage"]["active"] is True
 
 
 class TestNotifyEnabled:

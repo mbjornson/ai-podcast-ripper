@@ -4,6 +4,7 @@
 import argparse
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -27,6 +28,7 @@ TRANSCRIPTS_DIR = BASE_DIR / "transcripts"
 RAW_DIR = BASE_DIR / "raw"
 TMP_DIR = BASE_DIR / "tmp"
 METRICS_PATH = BASE_DIR / "metrics.jsonl"
+RECOVERY_STATE_PATH = BASE_DIR / "recovery-state.json"
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 
@@ -55,6 +57,135 @@ def save_state(state):
         json.dump(state, f, indent=2)
 
 
+def load_recovery_state():
+    """Load retry and quarantine state without changing the completed state schema."""
+    if RECOVERY_STATE_PATH.exists():
+        try:
+            with open(RECOVERY_STATE_PATH, encoding="utf-8") as f:
+                recovery = json.load(f)
+            if not isinstance(recovery, dict):
+                raise ValueError("recovery state must be a JSON object")
+            return recovery
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            corrupt_path = RECOVERY_STATE_PATH.with_name(
+                f"{RECOVERY_STATE_PATH.name}.corrupt-{time.time_ns()}"
+            )
+            try:
+                os.replace(RECOVERY_STATE_PATH, corrupt_path)
+                log.warning("Moved corrupt recovery state to %s: %s", corrupt_path, exc)
+            except OSError:
+                log.warning("Could not preserve corrupt recovery state: %s", exc)
+    return {"episode_failures": {}, "provider_outage": {}}
+
+
+def save_recovery_state(recovery):
+    temporary_path = RECOVERY_STATE_PATH.with_name(
+        f".{RECOVERY_STATE_PATH.name}.{os.getpid()}.{time.time_ns()}.tmp"
+    )
+    try:
+        with open(temporary_path, "w", encoding="utf-8") as f:
+            json.dump(recovery, f, indent=2, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary_path, RECOVERY_STATE_PATH)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def _episode_failure_key(feed_url, episode):
+    return f"{feed_url}\n{episode['guid']}"
+
+
+def is_episode_quarantined(recovery, feed_url, episode):
+    """Return false and reset a quarantine if the publisher changed its URL."""
+    failures = recovery.setdefault("episode_failures", {})
+    key = _episode_failure_key(feed_url, episode)
+    record = failures.get(key)
+    if not record:
+        return False
+    if record.get("audio_url") != episode.get("audio_url"):
+        del failures[key]
+        return False
+    return bool(record.get("quarantined"))
+
+
+def release_episode_if_enclosure_changed(recovery, feed_url, episode):
+    """Clear stale failure state when a feed republishes an episode with a new URL."""
+    failures = recovery.setdefault("episode_failures", {})
+    key = _episode_failure_key(feed_url, episode)
+    record = failures.get(key)
+    if record and record.get("audio_url") != episode.get("audio_url"):
+        del failures[key]
+        return True
+    return False
+
+
+def record_episode_failure(recovery, feed_url, episode, reason, limit=3):
+    """Increment an episode's failure count and quarantine it at ``limit``."""
+    failures = recovery.setdefault("episode_failures", {})
+    key = _episode_failure_key(feed_url, episode)
+    record = failures.get(key, {})
+    if record.get("audio_url") != episode.get("audio_url"):
+        record = {"count": 0, "audio_url": episode.get("audio_url")}
+    record["count"] = record.get("count", 0) + 1
+    record["audio_url"] = episode.get("audio_url")
+    record["last_error"] = str(reason)
+    record["quarantined"] = record["count"] >= limit
+    failures[key] = record
+    return record["quarantined"]
+
+
+def clear_episode_failure(recovery, feed_url, episode):
+    return recovery.setdefault("episode_failures", {}).pop(
+        _episode_failure_key(feed_url, episode), None,
+    ) is not None
+
+
+def record_provider_outage(recovery, reason, today):
+    """Record an unresolved dependency failure and report whether to remind today."""
+    outage = recovery["provider_outage"] = {
+        "active": True,
+        "last_error": str(reason),
+        "last_reminder_date": recovery.get("provider_outage", {}).get("last_reminder_date"),
+    }
+    if outage["last_reminder_date"] == today:
+        return False
+    outage["last_reminder_date"] = today
+    return True
+
+
+def clear_provider_outage(recovery):
+    recovery["provider_outage"] = {"active": False}
+
+
+def preflight_summarizer(settings):
+    """Verify the summary dependency before audio work begins."""
+    if settings.get("llm_provider", "ollama") != "omlx":
+        return True, None
+    try:
+        return metrics_mod.omlx_model_ready(
+            metrics_mod.configured_model(settings),
+            base_url=settings.get("omlx_base_url", metrics_mod.OMLX_BASE_URL),
+            api_key=settings.get("omlx_api_key"),
+            attempts=settings.get("omlx_preflight_attempts", 3),
+            backoff_seconds=tuple(settings.get("omlx_preflight_backoff_seconds") or ()),
+        )
+    except (TypeError, ValueError) as exc:
+        return False, f"oMLX preflight configuration error: {exc}"
+
+
+def pause_for_provider_outage(config, recovery, reason):
+    """Persist and announce a paused run, then return its non-zero exit status."""
+    reminder_due = record_provider_outage(recovery, reason, date.today().isoformat())
+    save_recovery_state(recovery)
+    log.error("Run paused before processing: %s", reason)
+    if notify_enabled(config.get("notify", {}).get("enabled", False)):
+        notify_complete(f"Run paused - {reason}")
+        if reminder_due:
+            notify_complete(f"Daily reminder - podcast-ripper is paused: {reason}")
+    return 1
+
+
 def slugify(text):
     text = text.lower().strip()
     text = re.sub(r"[^\w\s-]", "", text)
@@ -69,7 +200,8 @@ def raw_path_for_md(md_path):
 NON_RSS_DOMAINS = ["spotify.com", "apple.com/podcast", "youtube.com", "youtu.be"]
 
 
-def get_new_episodes(feed_url, feed_name, state, max_episodes, settings=None):
+def get_new_episodes(feed_url, feed_name, state, max_episodes, settings=None,
+                     recovery=None, on_recovery_change=None):
     if any(d in feed_url for d in NON_RSS_DOMAINS):
         log.error(
             "%s: URL is not an RSS feed (%s). Find the podcast's RSS feed URL instead.",
@@ -96,17 +228,29 @@ def get_new_episodes(feed_url, feed_name, state, max_episodes, settings=None):
         if not audio_url:
             continue
 
-        published = entry.get("published", "")
-        transcript_meta = entry.get("podcast_transcript")
-        all_unprocessed.append({
+        episode = {
             "guid": guid,
             "title": entry.get("title", "Untitled"),
             "audio_url": audio_url,
-            "published": published,
+            "published": entry.get("published", ""),
             "link": entry.get("link", ""),
-            "transcript_url": transcript_meta.get("url") if isinstance(transcript_meta, dict) else None,
-            "transcript_type": transcript_meta.get("type", "") if isinstance(transcript_meta, dict) else "",
-        })
+            "transcript_url": None,
+            "transcript_type": "",
+        }
+        if recovery is not None:
+            if release_episode_if_enclosure_changed(recovery, feed_url, episode):
+                if on_recovery_change:
+                    on_recovery_change(recovery)
+            if is_episode_quarantined(recovery, feed_url, episode):
+                log.warning("Quarantined after repeated failures; skipping: %s", episode["title"])
+                continue
+
+        published = entry.get("published", "")
+        transcript_meta = entry.get("podcast_transcript")
+        episode["published"] = published
+        episode["transcript_url"] = transcript_meta.get("url") if isinstance(transcript_meta, dict) else None
+        episode["transcript_type"] = transcript_meta.get("type", "") if isinstance(transcript_meta, dict) else ""
+        all_unprocessed.append(episode)
 
     recent = all_unprocessed[:max_episodes]
     if recent:
@@ -616,20 +760,24 @@ def update_transcript_index(config):
         log.exception("Transcript index update failed")
 
 
-def process_feeds(feeds, settings, state):
+def process_feeds(feeds, settings, state, recovery=None, on_recovery_change=None):
     """Check each feed and process new episodes. Returns count processed.
 
     State is saved per-episode so a run killed mid-sweep doesn't reprocess; the
     digest is rebuilt separately from metrics.jsonl rather than from this loop.
     """
     total_processed = 0
+    recovery = recovery if recovery is not None else {"episode_failures": {}}
+    failure_limit = settings.get("episode_failure_limit", 3)
     for feed_cfg in feeds:
         feed_name = feed_cfg["name"]
         feed_url = feed_cfg["url"]
         max_eps = settings.get("max_episodes_per_feed", 3)
 
         log.info("Checking feed: %s", feed_name)
-        episodes = get_new_episodes(feed_url, feed_name, state, max_eps, settings)
+        episodes = get_new_episodes(
+            feed_url, feed_name, state, max_eps, settings, recovery, on_recovery_change,
+        )
 
         if not episodes:
             log.info("No new episodes for: %s", feed_name)
@@ -637,18 +785,34 @@ def process_feeds(feeds, settings, state):
 
         log.info("Found %d new episode(s) for: %s", len(episodes), feed_name)
         for ep in episodes:
+            if release_episode_if_enclosure_changed(recovery, feed_url, ep):
+                if on_recovery_change:
+                    on_recovery_change(recovery)
+            if is_episode_quarantined(recovery, feed_url, ep):
+                log.warning("Quarantined after repeated failures; skipping: %s", ep["title"])
+                continue
             log.info("Processing: %s", ep["title"])
+            failure_reason = "episode did not produce a transcript and summary"
             try:
                 result = process_episode(ep, feed_name, settings)
-            except Exception:
+            except Exception as exc:
                 log.exception("Crashed processing: %s", ep["title"])
+                failure_reason = str(exc)
                 result = None
             if result:
                 state.setdefault(feed_url, []).append(ep["guid"])
                 save_state(state)
+                if clear_episode_failure(recovery, feed_url, ep) and on_recovery_change:
+                    on_recovery_change(recovery)
                 total_processed += 1
             else:
                 log.error("Failed: %s", ep["title"])
+                if record_episode_failure(recovery, feed_url, ep, failure_reason,
+                                          limit=failure_limit):
+                    log.error("Quarantined after %d failed runs: %s", failure_limit,
+                              ep["title"])
+                if on_recovery_change:
+                    on_recovery_change(recovery)
     return total_processed
 
 
@@ -712,7 +876,7 @@ def main(argv=None):
         target = date.fromisoformat(args.digest) if args.digest else date.today()
         count = rebuild_digest(config, target)
         log.info("Rebuilt digest for %s (%d episode(s)).", target, count)
-        return
+        return 0
 
     feeds = config.get("feeds") or []
     settings = config.get("settings", {})
@@ -721,12 +885,21 @@ def main(argv=None):
 
     if not feeds:
         log.warning("No feeds in config.yaml. Add some podcast RSS URLs and re-run.")
-        return
+        return 0
+
+    recovery = load_recovery_state()
+    ready, reason = preflight_summarizer(settings)
+    if not ready:
+        return pause_for_provider_outage(config, recovery, reason)
+
+    if recovery.get("provider_outage", {}).get("active"):
+        clear_provider_outage(recovery)
+        save_recovery_state(recovery)
 
     state = load_state()
     TMP_DIR.mkdir(exist_ok=True)
 
-    total_processed = process_feeds(feeds, settings, state)
+    total_processed = process_feeds(feeds, settings, state, recovery, save_recovery_state)
 
     # Build the digest from metrics (what was ripped today), not from this run's
     # in-memory list, so a sweep that gets interrupted still produces today's
@@ -756,7 +929,8 @@ def main(argv=None):
         if digest_count is not None:
             summary += f"; digest: {digest_count}"
         notify_complete(f"Run complete - {summary}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
