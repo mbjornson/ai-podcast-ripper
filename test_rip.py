@@ -789,7 +789,9 @@ class TestEpisodeFailureRecovery:
 
     def test_releases_a_changed_enclosure_and_persists_the_recovery_update(self, tmp_path, monkeypatch):
         recovery_path = tmp_path / "recovery-state.json"
+        state_path = tmp_path / "state.json"
         monkeypatch.setattr(rip, "RECOVERY_STATE_PATH", recovery_path)
+        monkeypatch.setattr(rip, "STATE_PATH", state_path)
         original = {"guid": "episode-1", "audio_url": "https://cdn.example/old.mp3"}
         changed = {
             "guid": "episode-1",
