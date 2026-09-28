@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pylint: disable=too-many-lines
 """Podcast ripper: fetch → transcribe → summarize → markdown."""
 
 import argparse
@@ -255,7 +256,7 @@ def raw_path_for_md(md_path):
 NON_RSS_DOMAINS = ["spotify.com", "apple.com/podcast", "youtube.com", "youtu.be"]
 
 
-def get_new_episodes(feed_url, feed_name, state, max_episodes, settings=None,
+def get_new_episodes(feed_url, feed_name, state, max_episodes, settings=None,  # pylint: disable=too-many-branches
                      recovery=None, on_recovery_change=None):
     if any(d in feed_url for d in NON_RSS_DOMAINS):
         log.error(
@@ -824,7 +825,7 @@ def update_transcript_index(config):
         log.exception("Transcript index update failed")
 
 
-def process_feeds(feeds, settings, state, recovery=None, on_recovery_change=None):
+def process_feeds(feeds, settings, state, recovery=None, on_recovery_change=None):  # pylint: disable=too-many-branches
     """Check each feed and process new episodes. Returns count processed.
 
     State is saved per-episode so a run killed mid-sweep doesn't reprocess; the
