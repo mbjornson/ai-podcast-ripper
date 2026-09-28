@@ -2,6 +2,8 @@
 """Podcast ripper: fetch → transcribe → summarize → markdown."""
 
 import argparse
+import fcntl
+import hashlib
 import json
 import logging
 import os
@@ -65,6 +67,16 @@ def load_recovery_state():
                 recovery = json.load(f)
             if not isinstance(recovery, dict):
                 raise ValueError("recovery state must be a JSON object")
+            # Validate nested structure: episode_failures and provider_outage must be dicts
+            ep_failures = recovery.get("episode_failures")
+            if ep_failures is not None and not isinstance(ep_failures, dict):
+                raise ValueError("episode_failures must be a dict")
+            for feed_episodes in (recovery.get("episode_failures") or {}).values():
+                if not isinstance(feed_episodes, dict):
+                    raise ValueError("episode_failures values must be dicts")
+            provider_outage = recovery.get("provider_outage")
+            if provider_outage is not None and not isinstance(provider_outage, dict):
+                raise ValueError("provider_outage must be a dict")
             return recovery
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             corrupt_path = RECOVERY_STATE_PATH.with_name(
@@ -76,6 +88,38 @@ def load_recovery_state():
             except OSError:
                 log.warning("Could not preserve corrupt recovery state: %s", exc)
     return {"episode_failures": {}, "provider_outage": {}}
+
+
+_RECOVERY_LOCK_PATH = RECOVERY_STATE_PATH.with_suffix(".lock")
+
+
+def _acquire_recovery_lock(timeout=30):
+    """Acquire exclusive lock on recovery state file. Blocks until acquired or timeout."""
+    _RECOVERY_LOCK_PATH.touch(exist_ok=True)
+    lock_file = None
+    try:
+        lock_file = open(_RECOVERY_LOCK_PATH, "w", encoding="utf-8")  # pylint: disable=consider-using-with
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return lock_file
+        except (IOError, OSError) as exc:
+            lock_file.close()
+            start = time.time()
+            while time.time() - start < timeout:
+                lock_file = open(_RECOVERY_LOCK_PATH, "w", encoding="utf-8")  # pylint: disable=consider-using-with
+                try:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                    return lock_file
+                except (IOError, OSError):
+                    lock_file.close()
+                    time.sleep(0.1)
+            raise TimeoutError(
+                f"Could not acquire recovery state lock after {timeout}s"
+            ) from exc
+    except Exception:
+        if lock_file:
+            lock_file.close()
+        raise
 
 
 def save_recovery_state(recovery):
@@ -94,6 +138,17 @@ def save_recovery_state(recovery):
 
 def _episode_failure_key(feed_url, episode):
     return f"{feed_url}\n{episode['guid']}"
+
+
+def _is_provider_failure(reason):
+    """Detect if a failure is provider-level (timeout, API down) vs episode-level."""
+    reason_lower = str(reason).lower()
+    provider_keywords = [
+        "timeout", "connection", "refused", "reset by peer",
+        "500", "503", "502", "429", "api", "server error",
+        "unreachable", "unavailable", "down", "service unavailable",
+    ]
+    return any(kw in reason_lower for kw in provider_keywords)
 
 
 def is_episode_quarantined(recovery, feed_url, episode):
@@ -252,7 +307,15 @@ def get_new_episodes(feed_url, feed_name, state, max_episodes, settings=None,
         episode["transcript_type"] = transcript_meta.get("type", "") if isinstance(transcript_meta, dict) else ""
         all_unprocessed.append(episode)
 
-    recent = all_unprocessed[:max_episodes]
+    # Deduplicate episodes by GUID to prevent duplicate entries from exhausting retries
+    seen_guids = set()
+    deduped = []
+    for ep in all_unprocessed:
+        if ep["guid"] not in seen_guids:
+            seen_guids.add(ep["guid"])
+            deduped.append(ep)
+
+    recent = deduped[:max_episodes]
     if recent:
         return recent
 
@@ -672,8 +735,9 @@ def record_episode_metrics(output_path, feed_name, podcast_slug, settings,
 
 def process_episode(episode, feed_name, settings):
     slug = slugify(f"{feed_name}--{episode['title']}")
+    audio_url_hash = hashlib.md5(episode["audio_url"].encode()).hexdigest()[:8]
     audio_ext = Path(episode["audio_url"].split("?")[0]).suffix or ".mp3"
-    audio_path = TMP_DIR / f"{slug}{audio_ext}"
+    audio_path = TMP_DIR / f"{slug}--{audio_url_hash}{audio_ext}"
     completed = False
 
     try:
@@ -807,10 +871,14 @@ def process_feeds(feeds, settings, state, recovery=None, on_recovery_change=None
                 total_processed += 1
             else:
                 log.error("Failed: %s", ep["title"])
-                if record_episode_failure(recovery, feed_url, ep, failure_reason,
-                                          limit=failure_limit):
-                    log.error("Quarantined after %d failed runs: %s", failure_limit,
-                              ep["title"])
+                if _is_provider_failure(failure_reason):
+                    log.warning("Provider failure (not marking episode): %s", failure_reason)
+                    record_provider_outage(recovery, failure_reason, str(date.today()))
+                else:
+                    if record_episode_failure(recovery, feed_url, ep, failure_reason,
+                                              limit=failure_limit):
+                        log.error("Quarantined after %d failed runs: %s", failure_limit,
+                                  ep["title"])
                 if on_recovery_change:
                     on_recovery_change(recovery)
     return total_processed
@@ -887,19 +955,26 @@ def main(argv=None):
         log.warning("No feeds in config.yaml. Add some podcast RSS URLs and re-run.")
         return 0
 
-    recovery = load_recovery_state()
-    ready, reason = preflight_summarizer(settings)
-    if not ready:
-        return pause_for_provider_outage(config, recovery, reason)
+    lock_file = None
+    try:
+        lock_file = _acquire_recovery_lock()
+        recovery = load_recovery_state()
+        ready, reason = preflight_summarizer(settings)
+        if not ready:
+            return pause_for_provider_outage(config, recovery, reason)
 
-    if recovery.get("provider_outage", {}).get("active"):
-        clear_provider_outage(recovery)
-        save_recovery_state(recovery)
+        if recovery.get("provider_outage", {}).get("active"):
+            clear_provider_outage(recovery)
+            save_recovery_state(recovery)
 
-    state = load_state()
-    TMP_DIR.mkdir(exist_ok=True)
+        state = load_state()
+        TMP_DIR.mkdir(exist_ok=True)
 
-    total_processed = process_feeds(feeds, settings, state, recovery, save_recovery_state)
+        total_processed = process_feeds(feeds, settings, state, recovery, save_recovery_state)
+    finally:
+        if lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.close()
 
     # Build the digest from metrics (what was ripped today), not from this run's
     # in-memory list, so a sweep that gets interrupted still produces today's
